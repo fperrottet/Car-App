@@ -66,3 +66,18 @@ tr.muted td { color: var(--muted); }
   th, td { padding: 6px; }
   .bar-col { display: none; }
 }
+.status { list-style: none; padding: 0; margin: 0 0 10px; }
+.status li { padding: 4px 0; }
+.status li span { display: inline-block; min-width: 230px; color: var(--muted); }
+details.card { padding: 10px 14px; }
+details.card summary { cursor: pointer; list-style: none; }
+details.card table { margin-top: 10px; }
+.chart-card { padding: 12px 8px; overflow-x: auto; }
+.chart { width: 100%; min-width: 640px; height: auto; display: block; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font-size: 12px; }
+.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+.chart .value { fill: var(--text); font-size: 13px; font-weight: 600; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; }
+.chart .dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+.chart .bar-km { fill: var(--accent); opacity: .75; }

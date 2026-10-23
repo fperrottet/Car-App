@@ -22,17 +22,26 @@
     <small>La perte de valeur (prix d'achat moins valeur résiduelle) est répartie linéairement sur la durée choisie.</small>
   </fieldset>
   <fieldset>
-    <legend>Liaison Home Assistant et EVCC (étape 2)</legend>
+    <legend>Liaison Home Assistant et EVCC</legend>
     <div class="grid">
       {{ m.field("odometer_entity", "Entité odomètre", vehicle.odometer_entity if vehicle else "sensor.216980_odometer") }}
-      {{ m.field("evcc_vehicle", "Véhicule EVCC", vehicle.evcc_vehicle if vehicle else "") }}
+      {{ m.field("evcc_url", "Adresse d'EVCC", vehicle.evcc_url if vehicle else "", hint="Par exemple http://192.168.1.20:7070, la même que dans ton navigateur") }}
+      {{ m.field("evcc_vehicle", "Véhicule EVCC", vehicle.evcc_vehicle if vehicle else "", hint="Vide : toutes les sessions de la borne") }}
     </div>
-    <small>Enregistrés dès maintenant, utilisés pour les imports automatiques dans la prochaine version.</small>
+    <small>L'odomètre et les sessions de charge sont importés automatiquement toutes les heures.</small>
   </fieldset>
   <button>Enregistrer</button>
 </form>
 
 {% if vehicle %}
+<section>
+  <h2>Synchronisation</h2>
+  <ul class="status">
+    <li><span>Odomètre (Home Assistant)</span> {{ status.get("sync_odometer") or "pas encore lancée" }}</li>
+    <li><span>Sessions de charge (EVCC)</span> {{ status.get("sync_evcc") or "pas encore lancée" }}</li>
+  </ul>
+  <form method="post" action="{{ base }}/sync"><input type="hidden" name="back" value="/vehicle"><button class="secondary">Synchroniser maintenant</button></form>
+</section>
 <section>
   <h2>Relevés du compteur</h2>
   <p class="muted">Servent au calcul du coût par km. Les km saisis dans les entretiens et les dépenses comptent aussi.</p>

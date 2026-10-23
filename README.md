@@ -2,7 +2,7 @@
 
 Add-on Home Assistant pour suivre tous les frais d'une voiture électrique : dépenses, contrats d'assurance et charges fixes, carnet d'entretien et factures (PDF, photos). Le tableau de bord donne le coût total, par mois et par km, dépréciation comprise.
 
-## Fonctionnalités (version 0.1)
+## Fonctionnalités
 
 - Fiche véhicule avec prix d'achat et dépréciation linéaire.
 - Dépenses avec catégories (fixes ou variables), km au compteur et pièce jointe.
@@ -11,8 +11,13 @@ Add-on Home Assistant pour suivre tous les frais d'une voiture électrique : dé
 - Documents : téléversement, recherche, téléchargement.
 - Tableau de bord : coût total, CHF/mois, CHF/km, répartition par catégorie, rappels (fin de contrat, délai de résiliation, service).
 - Export CSV des dépenses (séparateur `;`, s'ouvre directement dans Excel).
+- Import automatique, toutes les heures et à la demande :
+  - odomètre depuis Home Assistant (entité réglable, par défaut `sensor.216980_odometer`), un relevé par jour ;
+  - sessions de charge depuis l'API d'EVCC (`/api/sessions`), avec le coût calculé par EVCC tel quel.
+- Page Recharges : sessions par mois, kWh, part solaire, coût ; kWh/100 km et CHF/100 km au tableau de bord.
+- Graphique : coût par km cumulé et km parcourus par mois.
 
-Prochaine étape : import automatique de l'odomètre (`sensor.216980_odometer`) depuis Home Assistant et des sessions de charge EVCC avec leur coût.
+Réglages sur la page **Véhicule** : entité de l'odomètre, adresse d'EVCC (par exemple `http://192.168.1.20:7070`) et, si plusieurs voitures partagent la borne, le nom du véhicule dans EVCC.
 
 ## Installation dans Home Assistant
 

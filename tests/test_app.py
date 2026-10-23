@@ -10,7 +10,7 @@ TODAY = date(2026, 10, 23)
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(tmp_path, today=lambda: TODAY)
+    app = create_app(tmp_path, today=lambda: TODAY, sync_interval=None)
     with TestClient(app) as client:
         yield client
 
