@@ -16,14 +16,12 @@ Prochaine étape : import automatique de l'odomètre (`sensor.216980_odometer`) 
 
 ## Installation dans Home Assistant
 
-Le dépôt est privé : la boutique d'add-ons ne peut pas le lire, on l'installe donc comme add-on local.
+1. Dans HA : **Paramètres > Modules complémentaires > Boutique des modules complémentaires**.
+2. Menu ⋮ en haut à droite > **Dépôts**, ajoute `https://github.com/fperrottet/Car-App` et ferme la fenêtre.
+3. Cherche **Frais de voiture** dans la boutique, clique **Installer** (la construction prend quelques minutes sur un Pi).
+4. Clique **Démarrer** et active **Afficher dans la barre latérale**.
 
-1. Installe l'add-on **Samba share** ou **Advanced SSH & Web Terminal** si ce n'est pas déjà fait.
-2. Copie le dossier `car_costs` de ce dépôt dans le dossier `addons` de Home Assistant (`\\homeassistant\addons\car_costs` via Samba, ou `/addons/car_costs` en SSH).
-3. Dans HA : **Paramètres > Modules complémentaires > Boutique**, menu ⋮ en haut à droite, **Rechercher des mises à jour**. L'add-on apparaît sous « Modules complémentaires locaux ».
-4. Ouvre **Frais de voiture**, clique **Installer** (la construction prend quelques minutes sur un Pi), puis **Démarrer** et active **Afficher dans la barre latérale**.
-
-Pour une mise à jour : recopie le dossier `car_costs`, puis clique **Reconstruire** sur la page de l'add-on.
+Mises à jour : HA propose une mise à jour quand la `version` de `car_costs/config.yaml` change sur la branche `main` (menu ⋮ > **Rechercher des mises à jour** pour forcer la vérification).
 
 Les données (base SQLite et documents) sont dans le dossier `/data` de l'add-on et sont incluses dans les sauvegardes de Home Assistant.
 
