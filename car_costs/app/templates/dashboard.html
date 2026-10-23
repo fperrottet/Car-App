@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>{{ vehicle.name }}</h1>
+  <form method="get" action="{{ base }}/">
+    <select name="period" onchange="this.form.submit()">
+      <option value="year"{% if period == 'year' %} selected{% endif %}>Cette année</option>
+      <option value="12m"{% if period == '12m' %} selected{% endif %}>12 derniers mois</option>
+      <option value="all"{% if period == 'all' %} selected{% endif %}>Depuis l'achat</option>
+      {% for y in years %}<option value="{{ y }}"{% if period == y|string %} selected{% endif %}>{{ y }}</option>{% endfor %}
+    </select>
+    <noscript><button>Afficher</button></noscript>
+  </form>
+</header>
+<p class="muted">{{ label }} : du {{ summary.start|fdate }} au {{ summary.end|fdate }}{% if km_now %} · compteur {{ km_now|km }} km{% endif %}</p>
+
+<section class="tiles">
+  <div class="tile">
+    <span>Coût total</span>
+    <strong>{{ summary.total_with_depreciation|money }} CHF</strong>
+    <small>dont {{ summary.depreciation_cents|money }} de dépréciation</small>
+  </div>
+  <div class="tile">
+    <span>Par mois</span>
+    <strong>{{ summary.per_month_cents|money }} CHF</strong>
+    <small>fixes {{ summary.fixed_cents|money }} · variables {{ summary.variable_cents|money }}</small>
+  </div>
+  <div class="tile">
+    <span>Par km</span>
+    <strong>{% if summary.per_km_cents is not none %}{{ "%.2f"|format(summary.per_km_cents / 100) }} CHF{% else %}–{% endif %}</strong>
+    <small>{% if summary.km %}{{ summary.km|km }} km parcourus{% else %}ajoute des relevés de compteur{% endif %}</small>
+  </div>
+</section>
+
+{% if reminders %}
+<section>
+  <h2>À surveiller</h2>
+  <ul class="reminders">
+    {% for r in reminders %}
+    <li class="{{ 'overdue' if r.overdue }}"><span>{{ r.when|fdate }}</span> {{ r.text }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section>
+  <h2>Répartition</h2>
+  {% if summary.by_category or summary.depreciation_cents %}
+  {% set grand = summary.total_with_depreciation or 1 %}
+  <table>
+    <thead><tr><th>Catégorie</th><th>Type</th><th class="num">CHF</th><th class="bar-col"></th></tr></thead>
+    <tbody>
+      {% for name, kind, cents in summary.by_category %}
+      <tr>
+        <td>{{ name }}</td><td>{{ kind }}</td><td class="num">{{ cents|money }}</td>
+        <td><div class="bar" style="width: {{ (100 * cents / grand)|round(1) }}%"></div></td>
+      </tr>
+      {% endfor %}
+      {% if summary.depreciation_cents %}
+      <tr>
+        <td>Dépréciation</td><td>fixe</td><td class="num">{{ summary.depreciation_cents|money }}</td>
+        <td><div class="bar quiet" style="width: {{ (100 * summary.depreciation_cents / grand)|round(1) }}%"></div></td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Aucune dépense sur cette période. <a href="{{ base }}/expenses/new">Ajouter une dépense</a></p>
+  {% endif %}
+</section>
+{% endblock %}

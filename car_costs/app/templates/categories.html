@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Catégories</h1>
+<p class="muted">Les catégories « fixe » comptent dans les charges fixes du tableau de bord.</p>
+<table>
+  <thead><tr><th>Nom</th><th>Type</th><th class="num">Dépenses</th><th></th></tr></thead>
+  <tbody>
+    {% for c in categories %}
+    <tr>
+      <td colspan="2">
+        <form method="post" action="{{ base }}/categories" class="inline">
+          <input type="hidden" name="id" value="{{ c.id }}">
+          <input name="name" value="{{ c.name }}" required>
+          <select name="kind">{% for k in kinds %}<option{% if k == c.kind %} selected{% endif %}>{{ k }}</option>{% endfor %}</select>
+          <button class="secondary">Renommer</button>
+        </form>
+      </td>
+      <td class="num">{{ used.get(c.id, 0) }}</td>
+      <td>
+        <form method="post" action="{{ base }}/categories/{{ c.id }}/delete">
+          <button class="link danger" onclick="return confirm('Supprimer cette catégorie ? Ses dépenses deviennent « sans catégorie ».')">supprimer</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<h2>Nouvelle catégorie</h2>
+<form method="post" action="{{ base }}/categories" class="inline">
+  <input name="name" placeholder="Nom" required>
+  <select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select>
+  <button>Ajouter</button>
+</form>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>Dépenses</h1>
+  <div>
+    <a class="button" href="{{ base }}/expenses/new">Nouvelle dépense</a>
+    <a class="button secondary" href="{{ base }}/expenses.csv">Export CSV</a>
+  </div>
+</header>
+<form method="get" action="{{ base }}/expenses" class="inline">
+  <select name="year">
+    <option value="">Toutes les années</option>
+    {% for y in years %}<option value="{{ y }}"{% if year == y|string %} selected{% endif %}>{{ y }}</option>{% endfor %}
+  </select>
+  <select name="category">
+    <option value="">Toutes les catégories</option>
+    {% for c in categories %}<option value="{{ c.id }}"{% if category == c.id|string %} selected{% endif %}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <button class="secondary">Filtrer</button>
+</form>
+{% if expenses %}
+<table>
+  <thead><tr><th>Date</th><th>Catégorie</th><th>Fournisseur / description</th><th class="num">Km</th><th class="num">CHF</th></tr></thead>
+  <tbody>
+    {% for e in expenses %}
+    <tr>
+      <td><a href="{{ base }}/expenses/{{ e.id }}">{{ e.date|fdate }}</a></td>
+      <td>{{ e.category.name if e.category else "–" }}</td>
+      <td>
+        {{ e.vendor or "" }}{% if e.vendor and e.description %} · {% endif %}<span class="muted">{{ e.description or "" }}</span>
+        {% if e.generated %}<span class="tag">auto</span>{% endif %}
+        {% if doc_counts.get(e.id) %}<span class="tag">📎 {{ doc_counts[e.id] }}</span>{% endif %}
+      </td>
+      <td class="num">{{ e.odometer_km|km }}</td>
+      <td class="num">{{ e.amount_cents|money }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot><tr><td colspan="4">Total ({{ expenses|length }})</td><td class="num">{{ total|money }}</td></tr></tfoot>
+</table>
+{% else %}
+<p class="muted">Aucune dépense pour l'instant.</p>
+{% endif %}
+{% endblock %}

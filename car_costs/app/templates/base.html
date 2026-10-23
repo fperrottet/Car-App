@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Frais de voiture{% endblock %}</title>
+  <link rel="stylesheet" href="{{ base }}/static/style.css">
+</head>
+<body>
+  <nav>
+    <strong>Frais de voiture</strong>
+    <a href="{{ base }}/">Tableau de bord</a>
+    <a href="{{ base }}/expenses">Dépenses</a>
+    <a href="{{ base }}/contracts">Contrats</a>
+    <a href="{{ base }}/maintenance">Entretien</a>
+    <a href="{{ base }}/documents">Documents</a>
+    <a href="{{ base }}/vehicle">Véhicule</a>
+  </nav>
+  <main>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

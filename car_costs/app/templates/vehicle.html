@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>{{ "Véhicule" if vehicle else "Bienvenue : décris ta voiture" }}</h1>
+<form method="post" action="{{ base }}/vehicle" class="card">
+  <div class="grid">
+    {{ m.field("name", "Nom", vehicle.name if vehicle else "Skoda Citigo e iV", required=True) }}
+    {{ m.field("make", "Marque", vehicle.make if vehicle else "Skoda") }}
+    {{ m.field("model", "Modèle", vehicle.model if vehicle else "Citigo e iV") }}
+    {{ m.field("plate", "Plaque", vehicle.plate if vehicle else "") }}
+    {{ m.field("vin", "N° de châssis (VIN)", vehicle.vin if vehicle else "") }}
+  </div>
+  <fieldset>
+    <legend>Achat et dépréciation</legend>
+    <div class="grid">
+      {{ m.field("purchase_date", "Date d'achat", vehicle.purchase_date|iso if vehicle else "", type="date") }}
+      {{ m.field("purchase_price", "Prix d'achat (CHF)", vehicle.purchase_price_cents|amount if vehicle else "", attrs='inputmode="decimal"') }}
+      {{ m.field("purchase_odometer_km", "Km à l'achat", vehicle.purchase_odometer_km if vehicle else "", attrs='inputmode="numeric"') }}
+      {{ m.field("depreciation_years", "Durée d'amortissement (ans)", vehicle.depreciation_years if vehicle else 10, type="number", attrs='min="1" max="30"') }}
+      {{ m.field("residual_value", "Valeur résiduelle à la fin (CHF)", vehicle.residual_value_cents|amount if vehicle else "0", attrs='inputmode="decimal"') }}
+    </div>
+    <small>La perte de valeur (prix d'achat moins valeur résiduelle) est répartie linéairement sur la durée choisie.</small>
+  </fieldset>
+  <fieldset>
+    <legend>Liaison Home Assistant et EVCC (étape 2)</legend>
+    <div class="grid">
+      {{ m.field("odometer_entity", "Entité odomètre", vehicle.odometer_entity if vehicle else "sensor.216980_odometer") }}
+      {{ m.field("evcc_vehicle", "Véhicule EVCC", vehicle.evcc_vehicle if vehicle else "") }}
+    </div>
+    <small>Enregistrés dès maintenant, utilisés pour les imports automatiques dans la prochaine version.</small>
+  </fieldset>
+  <button>Enregistrer</button>
+</form>
+
+{% if vehicle %}
+<section>
+  <h2>Relevés du compteur</h2>
+  <p class="muted">Servent au calcul du coût par km. Les km saisis dans les entretiens et les dépenses comptent aussi.</p>
+  <form method="post" action="{{ base }}/vehicle/readings" class="inline">
+    <input type="date" name="date" value="{{ today|iso }}">
+    <input name="km" placeholder="km" inputmode="numeric" required>
+    <button>Ajouter</button>
+  </form>
+  {% if readings %}
+  <table>
+    <thead><tr><th>Date</th><th class="num">Km</th><th>Source</th><th></th></tr></thead>
+    <tbody>
+      {% for r in readings %}
+      <tr>
+        <td>{{ r.date|fdate }}</td><td class="num">{{ r.km|km }}</td><td>{{ r.source }}</td>
+        <td><form method="post" action="{{ base }}/vehicle/readings/{{ r.id }}/delete"><button class="link danger">supprimer</button></form></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+<p><a href="{{ base }}/categories">Gérer les catégories de dépenses</a></p>
+{% endif %}
+{% endblock %}

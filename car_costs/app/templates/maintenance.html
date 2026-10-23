@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>Carnet d'entretien</h1>
+  <a class="button" href="{{ base }}/maintenance/new">Nouvel entretien</a>
+</header>
+{% if items %}
+<table>
+  <thead><tr><th>Date</th><th class="num">Km</th><th>Garage</th><th>Travaux</th><th>Prochain</th><th class="num">CHF</th></tr></thead>
+  <tbody>
+    {% for i in items %}
+    <tr>
+      <td><a href="{{ base }}/maintenance/{{ i.id }}">{{ i.date|fdate }}</a></td>
+      <td class="num">{{ i.odometer_km|km }}</td>
+      <td>{{ i.garage or "" }}</td>
+      <td>{{ i.work.splitlines()[0] if i.work else "" }}</td>
+      <td>{{ i.next_date|fdate }}{% if i.next_date and i.next_km %} ou {% endif %}{% if i.next_km %}{{ i.next_km|km }} km{% endif %}</td>
+      <td class="num">{{ spent.get(i.id)|money }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Aucun entretien enregistré.</p>
+{% endif %}
+{% endblock %}

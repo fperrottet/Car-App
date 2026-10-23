@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>{{ "Modifier le contrat" if contract else "Nouveau contrat" }}</h1>
+<form method="post" enctype="multipart/form-data" action="{{ base }}/contracts/{{ contract.id if contract else 'new' }}" class="card">
+  <div class="grid">
+    {{ m.select("kind", "Type", kinds|zip_self, contract.kind if contract else "Assurance") }}
+    {{ m.field("provider", "Fournisseur / assureur", contract.provider if contract else "", required=True) }}
+    {{ m.field("policy_number", "N° de police / contrat", contract.policy_number if contract else "") }}
+    {{ m.field("start_date", "Début", contract.start_date|iso if contract else "", type="date", required=True) }}
+    {{ m.field("end_date", "Fin", contract.end_date|iso if contract else "", type="date", hint="Vide si à durée indéterminée") }}
+    {{ m.field("notice_days", "Préavis de résiliation (jours)", contract.notice_days if contract else "", type="number", attrs='min="0"') }}
+  </div>
+  <fieldset>
+    <legend>Coût</legend>
+    <div class="grid">
+      {{ m.field("amount", "Prime / montant (CHF)", contract.amount_cents|amount if contract else "", attrs='inputmode="decimal"') }}
+      {{ m.select("period", "Périodicité", periods|zip_self, contract.period if contract else "annuel") }}
+      {{ m.select("category_id", "Catégorie", categories|options, contract.category_id if contract else none, empty="–") }}
+      {{ m.field("deductible", "Franchise (CHF)", contract.deductible_cents|amount if contract else "", attrs='inputmode="decimal"') }}
+    </div>
+    <small>Pour un changement de prime au renouvellement, termine ce contrat et crée-en un nouveau : les échéances passées gardent ainsi leur montant.</small>
+  </fieldset>
+  <div class="grid">
+    {{ m.textarea("coverage", "Couverture", contract.coverage if contract else "") }}
+    {{ m.textarea("notes", "Notes", contract.notes if contract else "") }}
+  </div>
+  {{ m.attachments(documents, "/contracts/" ~ contract.id if contract else "/contracts") }}
+  <div class="actions">
+    <button>Enregistrer</button>
+    <a href="{{ base }}/contracts">Annuler</a>
+    {% if contract %}
+    <button class="link danger" formaction="{{ base }}/contracts/{{ contract.id }}/delete" formnovalidate onclick="return confirm('Supprimer ce contrat et ses échéances automatiques ?')">Supprimer</button>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

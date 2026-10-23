@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>Documents</h1>
+<form method="post" enctype="multipart/form-data" action="{{ base }}/documents" class="card inline">
+  <input type="file" name="file" accept="application/pdf,image/*" required>
+  <input name="doc_title" placeholder="Titre (facultatif)">
+  <button>Ajouter</button>
+</form>
+<form method="get" action="{{ base }}/documents" class="inline">
+  <input type="search" name="q" value="{{ q }}" placeholder="Rechercher un document">
+  <button class="secondary">Rechercher</button>
+</form>
+{% if documents %}
+<table>
+  <thead><tr><th>Document</th><th>Lié à</th><th>Ajouté le</th><th class="num">Taille</th><th></th></tr></thead>
+  <tbody>
+    {% for d in documents %}
+    <tr>
+      <td><a href="{{ base }}/documents/{{ d.id }}/file" target="_blank">{{ d.title }}</a></td>
+      <td>
+        {% if d.expense %}<a href="{{ base }}/expenses/{{ d.expense.id }}">Dépense du {{ d.expense.date|fdate }}</a>
+        {% elif d.contract %}<a href="{{ base }}/contracts/{{ d.contract.id }}">{{ d.contract.label }}</a>
+        {% elif d.maintenance %}<a href="{{ base }}/maintenance/{{ d.maintenance.id }}">Entretien du {{ d.maintenance.date|fdate }}</a>
+        {% else %}<span class="muted">–</span>{% endif %}
+      </td>
+      <td>{{ d.uploaded_at.date()|fdate }}</td>
+      <td class="num">{{ (d.size / 1024)|round|int }} Ko</td>
+      <td>
+        <a href="{{ base }}/documents/{{ d.id }}/file?download=true">télécharger</a>
+        <form method="post" action="{{ base }}/documents/{{ d.id }}/delete" class="inline-form">
+          <button class="link danger" onclick="return confirm('Supprimer ce document ?')">supprimer</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Aucun document{% if q %} pour « {{ q }} »{% endif %}.</p>
+{% endif %}
+{% endblock %}

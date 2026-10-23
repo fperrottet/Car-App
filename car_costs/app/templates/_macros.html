@@ -1,0 +1,48 @@
+{% macro field(name, label, value="", type="text", required=False, hint="", attrs="") -%}
+<label>{{ label }}{% if required %} *{% endif %}
+  <input type="{{ type }}" name="{{ name }}" value="{{ form.get(name, value if value is not none else '') }}"{% if required %} required{% endif %} {{ attrs|safe }}>
+  {% if hint %}<small>{{ hint }}</small>{% endif %}
+</label>
+{%- endmacro %}
+
+{% macro textarea(name, label, value="") -%}
+<label class="wide">{{ label }}
+  <textarea name="{{ name }}" rows="3">{{ form.get(name, value if value is not none else '') }}</textarea>
+</label>
+{%- endmacro %}
+
+{% macro select(name, label, options, selected=none, empty="") -%}
+{# options : liste de (valeur, libellé) #}
+{% set current = form.get(name, selected|string if selected is not none else '') %}
+<label>{{ label }}
+  <select name="{{ name }}">
+    {% if empty %}<option value="">{{ empty }}</option>{% endif %}
+    {% for value, text in options %}
+    <option value="{{ value }}"{% if value|string == current %} selected{% endif %}>{{ text }}</option>
+    {% endfor %}
+  </select>
+</label>
+{%- endmacro %}
+
+{% macro attachments(documents, back) -%}
+<fieldset>
+  <legend>Pièces jointes</legend>
+  {% if documents %}
+  <ul class="docs">
+    {% for d in documents %}
+    <li>
+      <a href="{{ base }}/documents/{{ d.id }}/file" target="_blank">{{ d.title }}</a>
+      <small>{{ (d.size / 1024)|round|int }} Ko</small>
+      <button class="link danger" formaction="{{ base }}/documents/{{ d.id }}/delete" formmethod="post" name="back" value="{{ back }}" formnovalidate onclick="return confirm('Supprimer ce document ?')">supprimer</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <div class="grid">
+    <label>Ajouter un fichier (PDF, photo)
+      <input type="file" name="file" accept="application/pdf,image/*">
+    </label>
+    {{ field("doc_title", "Titre du document", hint="Facultatif, sinon le nom du fichier") }}
+  </div>
+</fieldset>
+{%- endmacro %}

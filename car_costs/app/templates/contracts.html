@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>Contrats et charges fixes</h1>
+  <a class="button" href="{{ base }}/contracts/new">Nouveau contrat</a>
+</header>
+<p class="muted">Un contrat avec un montant et une périodicité crée automatiquement ses échéances dans les dépenses.</p>
+{% if contracts %}
+<table>
+  <thead><tr><th>Type</th><th>Fournisseur</th><th>Période</th><th class="num">Montant</th><th>Statut</th></tr></thead>
+  <tbody>
+    {% for c in contracts %}
+    {% set active = not c.end_date or c.end_date >= today %}
+    <tr class="{{ '' if active else 'muted' }}">
+      <td><a href="{{ base }}/contracts/{{ c.id }}">{{ c.kind }}</a></td>
+      <td>{{ c.provider }}{% if c.policy_number %} <span class="muted">n° {{ c.policy_number }}</span>{% endif %}</td>
+      <td>{{ c.start_date|fdate }} → {{ c.end_date|fdate if c.end_date else "indéterminée" }}</td>
+      <td class="num">{% if c.amount_cents %}{{ c.amount_cents|money }} / {{ c.period }}{% endif %}</td>
+      <td>{{ "en cours" if active else "terminé" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Aucun contrat. Commence par ton assurance.</p>
+{% endif %}
+{% endblock %}
