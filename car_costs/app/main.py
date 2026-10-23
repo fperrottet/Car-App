@@ -1,7 +1,10 @@
 """Application web : routes et rendu des pages."""
 
+import asyncio
 import csv
 import io
+import logging
+from contextlib import asynccontextmanager
 import os
 import uuid
 from datetime import date, datetime, timedelta
@@ -15,14 +18,15 @@ from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from . import costs
-from .db import Base, make_engine, make_sessionmaker
+from . import charts, costs, sync
+from .db import Base, add_missing_columns, make_engine, make_sessionmaker
 from .models import (
     CATEGORY_KINDS,
     CONTRACT_KINDS,
     DEFAULT_CATEGORIES,
     PERIODS,
     Category,
+    ChargingSession,
     Contract,
     Document,
     Expense,
@@ -33,6 +37,7 @@ from .models import (
 from .util import clean, format_date, format_km, format_money, parse_date, parse_int, parse_money
 
 HERE = Path(__file__).parent
+log = logging.getLogger("car_costs")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -45,12 +50,13 @@ templates.env.filters["options"] = lambda items, attr="name": [(i.id, getattr(i,
 templates.env.filters["zip_self"] = lambda items: [(i, i) for i in items]
 
 
-def create_app(data_dir: Path | None = None, today=date.today) -> FastAPI:
+def create_app(data_dir: Path | None = None, today=date.today, sync_interval: float | None = 3600) -> FastAPI:
     data_dir = Path(data_dir or os.environ.get("CAR_COSTS_DATA", "data"))
     docs_dir = data_dir / "documents"
     docs_dir.mkdir(parents=True, exist_ok=True)
     engine = make_engine(data_dir)
     Base.metadata.create_all(engine)
+    add_missing_columns(engine)
     Sessions = make_sessionmaker(engine)
 
     with Sessions() as session:
@@ -58,7 +64,26 @@ def create_app(data_dir: Path | None = None, today=date.today) -> FastAPI:
             session.add_all(Category(name=n, kind=k) for n, k in DEFAULT_CATEGORIES)
             session.commit()
 
-    app = FastAPI(title="Frais de voiture", docs_url=None, redoc_url=None)
+    def run_sync() -> None:
+        with Sessions() as session:
+            sync.run_sync(session)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        async def loop():
+            while True:
+                try:
+                    await asyncio.to_thread(run_sync)
+                except Exception:  # ne jamais arrêter la boucle
+                    log.exception("Synchronisation en échec")
+                await asyncio.sleep(sync_interval)
+
+        task = asyncio.create_task(loop()) if sync_interval else None
+        yield
+        if task:
+            task.cancel()
+
+    app = FastAPI(title="Frais de voiture", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.middleware("http")
@@ -154,6 +179,7 @@ def create_app(data_dir: Path | None = None, today=date.today) -> FastAPI:
                 years=years,
                 reminders=costs.reminders(session, vehicle, now),
                 km_now=costs.current_km(session, vehicle),
+                chart=charts.cost_and_km_chart(costs.monthly(session, vehicle, now)),
             )
 
     # ---------------------------------------------------------------- véhicule
@@ -171,7 +197,14 @@ def create_app(data_dir: Path | None = None, today=date.today) -> FastAPI:
                         .order_by(OdometerReading.date.desc())
                     )
                 )
-            return render(request, "vehicle.html", vehicle=vehicle, readings=readings, today=today())
+            return render(
+                request,
+                "vehicle.html",
+                vehicle=vehicle,
+                readings=readings,
+                today=today(),
+                status=sync.get_settings(session),
+            )
 
     @app.post("/vehicle")
     async def vehicle_save(request: Request):
@@ -191,8 +224,13 @@ def create_app(data_dir: Path | None = None, today=date.today) -> FastAPI:
                 vehicle.residual_value_cents = parse_money(form.get("residual_value")) or 0
                 vehicle.odometer_entity = clean(form.get("odometer_entity"))
                 vehicle.evcc_vehicle = clean(form.get("evcc_vehicle"))
+                vehicle.evcc_url = clean(form.get("evcc_url"))
+                if vehicle.evcc_url and not vehicle.evcc_url.startswith(("http://", "https://")):
+                    vehicle.evcc_url = "http://" + vehicle.evcc_url
             except ValueError as exc:
-                return render(request, "vehicle.html", vehicle=vehicle, readings=[], today=today(), form=form, error=str(exc))
+                return render(
+                    request, "vehicle.html", vehicle=vehicle, readings=[], today=today(), status={}, form=form, error=str(exc)
+                )
             session.add(vehicle)
             session.commit()
         return redirect(request, "/")
@@ -230,6 +268,45 @@ def create_app(data_dir: Path | None = None, today=date.today) -> FastAPI:
             session.delete(get_or_404(session, OdometerReading, reading_id))
             session.commit()
         return redirect(request, "/vehicle")
+
+    # ---------------------------------------------------------------- synchronisation et recharges
+
+    @app.post("/sync")
+    async def sync_now(request: Request):
+        form = await request.form()
+        await asyncio.to_thread(run_sync)
+        back = form.get("back") or "/charging"
+        return redirect(request, back if back.startswith("/") and not back.startswith("//") else "/charging")
+
+    @app.get("/charging", response_class=HTMLResponse)
+    def charging_list(request: Request):
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return redirect(request, "/vehicle")
+            items = list(
+                session.scalars(
+                    select(ChargingSession)
+                    .where(ChargingSession.vehicle_id == vehicle.id)
+                    .order_by(ChargingSession.started.desc())
+                )
+            )
+            months: dict[date, dict] = {}
+            for item in items:
+                key = item.started.date().replace(day=1)
+                month = months.setdefault(key, {"month": key, "count": 0, "kwh": 0.0, "cents": 0, "solar_kwh": 0.0, "items": []})
+                month["count"] += 1
+                month["kwh"] += item.energy_kwh
+                month["cents"] += item.cost_cents or 0
+                month["solar_kwh"] += item.energy_kwh * (item.solar_pct or 0) / 100
+                month["items"].append(item)
+            return render(
+                request,
+                "charging.html",
+                vehicle=vehicle,
+                months=list(months.values()),
+                status=sync.get_settings(session),
+            )
 
     # ---------------------------------------------------------------- dépenses
 

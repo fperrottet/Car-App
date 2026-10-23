@@ -1,13 +1,16 @@
 """Calculs : échéances des contrats, coût total, CHF/km et rappels."""
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import PERIODS, Contract, Expense, Maintenance, OdometerReading, Vehicle
+from .models import PERIODS, ChargingSession, Contract, Expense, Maintenance, OdometerReading, Vehicle
 from .util import add_months, format_date, format_km
+
+
+HOME_CHARGING = "Recharge à domicile (EVCC)"
 
 
 def due_dates(contract: Contract, until: date) -> list[date]:
@@ -67,6 +70,12 @@ def odometer_points(session: Session, vehicle: Vehicle) -> list[tuple[date, int]
             select(model).where(model.vehicle_id == vehicle.id, model.odometer_km.is_not(None))
         )
         points += [(r.date, r.odometer_km) for r in rows]
+    sessions = session.scalars(
+        select(ChargingSession).where(
+            ChargingSession.vehicle_id == vehicle.id, ChargingSession.odometer_km.is_not(None)
+        )
+    )
+    points += [(s.started.date(), s.odometer_km) for s in sessions]
     return sorted(points)
 
 
@@ -111,6 +120,8 @@ class Summary:
     variable_cents: int = 0
     depreciation_cents: int = 0
     km: int | None = None
+    charging_cents: int = 0
+    energy_kwh: float = 0.0
     by_category: list[tuple[str, str, int]] = field(default_factory=list)
 
     @property
@@ -129,6 +140,10 @@ class Summary:
     def per_km_cents(self) -> float | None:
         return self.total_with_depreciation / self.km if self.km else None
 
+    @property
+    def kwh_per_100km(self) -> float | None:
+        return 100 * self.energy_kwh / self.km if self.km and self.energy_kwh else None
+
 
 def summarize(session: Session, vehicle: Vehicle, start: date, end: date) -> Summary:
     summary = Summary(start=start, end=end)
@@ -145,6 +160,21 @@ def summarize(session: Session, vehicle: Vehicle, start: date, end: date) -> Sum
             summary.fixed_cents += expense.amount_cents
         else:
             summary.variable_cents += expense.amount_cents
+    charges = list(
+        session.scalars(
+            select(ChargingSession).where(
+                ChargingSession.vehicle_id == vehicle.id,
+                ChargingSession.started >= datetime.combine(start, time.min),
+                ChargingSession.started < datetime.combine(end + timedelta(days=1), time.min),
+            )
+        )
+    )
+    if charges:
+        summary.energy_kwh = sum(c.energy_kwh for c in charges)
+        summary.charging_cents = sum(c.cost_cents or 0 for c in charges)
+        totals[(HOME_CHARGING, "variable")] = totals.get((HOME_CHARGING, "variable"), 0) + summary.charging_cents
+        summary.total_cents += summary.charging_cents
+        summary.variable_cents += summary.charging_cents
     summary.by_category = sorted(((n, k, c) for (n, k), c in totals.items()), key=lambda row: -row[2])
     summary.depreciation_cents = depreciation(vehicle, start, end)
     summary.km = km_between(odometer_points(session, vehicle), start, end)
@@ -188,3 +218,35 @@ def reminders(session: Session, vehicle: Vehicle, today: date) -> list[Reminder]
             ) + f" (prévu à {format_km(latest.next_km)} km)"
             items.append(Reminder(today, text, left < 0))
     return sorted(items, key=lambda r: r.when)
+
+
+@dataclass
+class Month:
+    start: date
+    km: int | None
+    cost_cents: int
+    per_km_cents: float | None  # cumulé depuis le début de la série
+
+
+def monthly(session: Session, vehicle: Vehicle, today: date) -> list[Month]:
+    """Une ligne par mois, de l'achat (ou de la première donnée) à aujourd'hui."""
+    points = odometer_points(session, vehicle)
+    firsts = [d for d in (vehicle.purchase_date, session.scalar(select(func.min(Expense.date)))) if d]
+    if points:
+        firsts.append(points[0][0])
+    if not firsts:
+        return []
+    month = date(min(firsts).year, min(firsts).month, 1)
+    origin = month
+    months: list[Month] = []
+    cumulative = 0
+    while month <= today:
+        end = min(add_months(month, 1) - timedelta(days=1), today)
+        summary = summarize(session, vehicle, month, end)
+        cumulative += summary.total_with_depreciation
+        km_total = km_between(points, origin, end)
+        months.append(
+            Month(month, summary.km, summary.total_with_depreciation, cumulative / km_total if km_total else None)
+        )
+        month = add_months(month, 1)
+    return months

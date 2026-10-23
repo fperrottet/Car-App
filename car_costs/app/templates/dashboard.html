@@ -30,6 +30,13 @@
     <strong>{% if summary.per_km_cents is not none %}{{ "%.2f"|format(summary.per_km_cents / 100) }} CHF{% else %}–{% endif %}</strong>
     <small>{% if summary.km %}{{ summary.km|km }} km parcourus{% else %}ajoute des relevés de compteur{% endif %}</small>
   </div>
+  {% if summary.energy_kwh %}
+  <div class="tile">
+    <span>Recharge à domicile (EVCC)</span>
+    <strong>{{ summary.charging_cents|money }} CHF</strong>
+    <small>{{ "%.0f"|format(summary.energy_kwh) }} kWh{% if summary.kwh_per_100km %} · {{ "%.1f"|format(summary.kwh_per_100km) }} kWh/100 km{% endif %}{% if summary.km %} · {{ "%.2f"|format(summary.charging_cents / summary.km) }} CHF/100 km{% endif %}</small>
+  </div>
+  {% endif %}
 </section>
 
 {% if reminders %}
@@ -40,6 +47,13 @@
     <li class="{{ 'overdue' if r.overdue }}"><span>{{ r.when|fdate }}</span> {{ r.text }}</li>
     {% endfor %}
   </ul>
+</section>
+{% endif %}
+
+{% if chart %}
+<section>
+  <h2>Évolution</h2>
+  <div class="card chart-card">{{ chart|safe }}</div>
 </section>
 {% endif %}
 

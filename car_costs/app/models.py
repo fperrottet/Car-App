@@ -44,6 +44,7 @@ class Vehicle(Base):
     # Préparé pour l'étape 2 (imports Home Assistant et EVCC).
     odometer_entity: Mapped[str | None] = mapped_column(String(200))
     evcc_vehicle: Mapped[str | None] = mapped_column(String(100))
+    evcc_url: Mapped[str | None] = mapped_column(String(200))
 
 
 class Category(Base):
@@ -146,3 +147,31 @@ class Document(Base):
     expense: Mapped[Expense | None] = relationship()
     contract: Mapped[Contract | None] = relationship()
     maintenance: Mapped[Maintenance | None] = relationship()
+
+
+class ChargingSession(Base):
+    """Session de charge importée d'EVCC ; le coût est celui calculé par EVCC."""
+
+    __tablename__ = "charging_session"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"))
+    evcc_id: Mapped[int] = mapped_column(unique=True)
+    started: Mapped[datetime]
+    finished: Mapped[datetime | None]
+    loadpoint: Mapped[str | None] = mapped_column(String(100))
+    evcc_vehicle: Mapped[str | None] = mapped_column(String(100))
+    energy_kwh: Mapped[float]
+    cost_cents: Mapped[int | None]
+    price_per_kwh: Mapped[float | None]
+    solar_pct: Mapped[float | None]
+    odometer_km: Mapped[int | None]
+
+
+class Setting(Base):
+    """Petites valeurs persistantes (état de la dernière synchronisation)."""
+
+    __tablename__ = "setting"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text)

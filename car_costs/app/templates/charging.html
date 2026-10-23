@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>Recharges à domicile</h1>
+  <form method="post" action="{{ base }}/sync"><input type="hidden" name="back" value="/charging"><button class="secondary">Synchroniser maintenant</button></form>
+</header>
+<p class="muted">
+  Sessions importées d'EVCC avec le coût qu'il calcule (tarif réseau, part solaire au prix de revente).
+  Dernière synchronisation : {{ status.get("sync_evcc") or "pas encore lancée" }}.
+  {% if not vehicle.evcc_url %}<a href="{{ base }}/vehicle">Renseigne l'adresse d'EVCC</a> pour activer l'import.{% endif %}
+</p>
+<p class="muted">Les recharges sur bornes publiques se saisissent comme dépenses (catégorie « Recharge externe »).</p>
+
+{% for m in months %}
+<details{% if loop.first %} open{% endif %} class="card">
+  <summary class="row">
+    <strong>{{ m.month.strftime("%m.%Y") }}</strong>
+    <span class="muted">{{ m.count }} sessions · {{ "%.1f"|format(m.kwh) }} kWh · {% if m.kwh %}{{ "%.0f"|format(100 * m.solar_kwh / m.kwh) }} % solaire · {% endif %}<strong>{{ m.cents|money }} CHF</strong></span>
+  </summary>
+  <table>
+    <thead><tr><th>Début</th><th>Fin</th><th class="num">kWh</th><th class="num">Solaire</th><th class="num">CHF/kWh</th><th class="num">CHF</th></tr></thead>
+    <tbody>
+      {% for s in m["items"] %}
+      <tr>
+        <td>{{ s.started.strftime("%d.%m.%Y %H:%M") }}</td>
+        <td>{{ s.finished.strftime("%H:%M") if s.finished else "en cours" }}</td>
+        <td class="num">{{ "%.2f"|format(s.energy_kwh) }}</td>
+        <td class="num">{{ "%.0f %%"|format(s.solar_pct) if s.solar_pct is not none else "" }}</td>
+        <td class="num">{{ "%.3f"|format(s.price_per_kwh) if s.price_per_kwh is not none else "" }}</td>
+        <td class="num">{{ s.cost_cents|money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% else %}
+<p class="muted">Aucune session importée pour l'instant.</p>
+{% endfor %}
+{% endblock %}
