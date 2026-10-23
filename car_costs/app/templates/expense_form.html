@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>{{ "Modifier la dépense" if expense else "Nouvelle dépense" }}</h1>
+{% if expense and expense.generated %}
+<p class="note">Échéance créée automatiquement depuis le contrat « {{ expense.contract.label }} ». Elle sera recalculée si tu modifies le contrat.</p>
+{% endif %}
+<form method="post" enctype="multipart/form-data" action="{{ base }}/expenses/{{ expense.id if expense else 'new' }}" class="card">
+  <div class="grid">
+    {{ m.field("date", "Date", expense.date|iso if expense else today|iso, type="date", required=True) }}
+    {{ m.field("amount", "Montant (CHF)", expense.amount_cents|amount if expense else "", required=True, attrs='inputmode="decimal" autofocus') }}
+    {{ m.select("category_id", "Catégorie", categories|options, expense.category_id if expense else none, empty="–") }}
+    {{ m.field("vendor", "Fournisseur", expense.vendor if expense else "") }}
+    {{ m.field("odometer_km", "Km au compteur", expense.odometer_km if expense else "", attrs='inputmode="numeric"') }}
+    {{ m.select("contract_id", "Contrat lié", contracts|options("label"), expense.contract_id if expense else none, empty="aucun") }}
+    {{ m.textarea("description", "Description", expense.description if expense else "") }}
+  </div>
+  {{ m.attachments(documents, "/expenses/" ~ expense.id if expense else "/expenses") }}
+  <div class="actions">
+    <button>Enregistrer</button>
+    <a href="{{ base }}/expenses">Annuler</a>
+    {% if expense %}
+    <button class="link danger" formaction="{{ base }}/expenses/{{ expense.id }}/delete" formnovalidate onclick="return confirm('Supprimer cette dépense ?')">Supprimer</button>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

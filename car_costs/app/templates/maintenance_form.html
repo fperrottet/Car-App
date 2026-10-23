@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>{{ "Modifier l'entretien" if item else "Nouvel entretien" }}</h1>
+<form method="post" enctype="multipart/form-data" action="{{ base }}/maintenance/{{ item.id if item else 'new' }}" class="card">
+  <div class="grid">
+    {{ m.field("date", "Date", item.date|iso if item else today|iso, type="date", required=True) }}
+    {{ m.field("odometer_km", "Km au compteur", item.odometer_km if item else "", attrs='inputmode="numeric"') }}
+    {{ m.field("garage", "Garage", item.garage if item else "") }}
+    {{ m.field("amount", "Montant de la facture (CHF)", expense.amount_cents|amount if expense else "", attrs='inputmode="decimal"', hint="Crée la dépense correspondante (catégorie Entretien)") }}
+    {{ m.textarea("work", "Travaux effectués *", item.work if item else "") }}
+  </div>
+  <fieldset>
+    <legend>Prochain service</legend>
+    <div class="grid">
+      {{ m.field("next_date", "Date", item.next_date|iso if item else "", type="date") }}
+      {{ m.field("next_km", "Ou à (km)", item.next_km if item else "", attrs='inputmode="numeric"') }}
+    </div>
+  </fieldset>
+  {{ m.textarea("notes", "Notes", item.notes if item else "") }}
+  {{ m.attachments(documents, "/maintenance/" ~ item.id if item else "/maintenance") }}
+  <div class="actions">
+    <button>Enregistrer</button>
+    <a href="{{ base }}/maintenance">Annuler</a>
+    {% if item %}
+    <button class="link danger" formaction="{{ base }}/maintenance/{{ item.id }}/delete" formnovalidate onclick="return confirm('Supprimer cet entretien et sa dépense ?')">Supprimer</button>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}
