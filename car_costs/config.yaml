@@ -1,5 +1,5 @@
 name: Frais de voiture
-version: "0.3.1"
+version: "0.4.0"
 slug: car_costs
 description: Dépenses, contrats, entretien, pneus, batterie et rappels de la voiture, avec le coût par km
 url: https://github.com/fperrottet/car-app
@@ -14,3 +14,7 @@ panel_icon: mdi:car-electric
 panel_title: Frais voiture
 # Accès à l'API de Home Assistant, utilisé à l'étape 2 (odomètre, EVCC).
 homeassistant_api: true
+# Pour copier la carte Lovelace dans /config/www (ressource /local/car-costs-card.js).
+map:
+  - type: homeassistant_config
+    read_only: false
