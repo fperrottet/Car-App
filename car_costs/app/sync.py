@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import costs
-from .models import BatterySnapshot, ChargingSession, OdometerReading, Setting, Vehicle
+from .models import BatterySnapshot, ChargingSession, OdometerReading, Setting, TireSet, Vehicle
 
 MILES_TO_KM = 1.609344
 # Le recorder de HA garde 10 jours d'historique par défaut.
@@ -317,15 +317,50 @@ def ha_sensors(session: Session, vehicle: Vehicle, today: date) -> dict[str, tup
             first.text[:250], None, "Frais voiture : prochain rappel", "mdi:calendar-alert",
             {"date": first.when.isoformat(), "en_retard": first.overdue, "nombre": len(alerts)},
         )
-    latest = session.scalars(
-        select(BatterySnapshot).where(BatterySnapshot.vehicle_id == vehicle.id).order_by(BatterySnapshot.date.desc())
-    ).first()
-    if latest and latest.cells:
-        cells = json.loads(latest.cells)
+    snapshots = list(
+        session.scalars(
+            select(BatterySnapshot).where(BatterySnapshot.vehicle_id == vehicle.id).order_by(BatterySnapshot.date.desc())
+        )
+    )
+    latest = snapshots[0] if snapshots else None
+    cells = json.loads(latest.cells) if latest and latest.cells else []
+    if cells:
         sensors["cellule_min"] = (
             min(cells), "%", "Batterie : cellule la plus faible", "mdi:battery-heart-variant",
             {"moyenne": round(sum(cells) / len(cells), 2), "max": max(cells), "cellule": cells.index(min(cells)) + 1},
         )
+    if latest:
+        # Pour la carte Lovelace : SoH, cellules et historique (au plus ~1 point par semaine sur 2 ans).
+        history = []
+        for snap in reversed(snapshots[:730]):
+            snap_cells = json.loads(snap.cells) if snap.cells else []
+            value = snap.soh if snap.soh is not None else (sum(snap_cells) / len(snap_cells) if snap_cells else None)
+            if value is not None and (not history or (snap.date - date.fromisoformat(history[-1][0])).days >= 7):
+                history.append([snap.date.isoformat(), round(value, 2)])
+        soh = latest.soh if latest.soh is not None else (round(sum(cells) / len(cells), 2) if cells else None)
+        sensors["batterie"] = (
+            soh, "%", "Batterie : état de santé", "mdi:battery-heart",
+            {"date": latest.date.isoformat(), "cells": cells, "history": history},
+        )
+    tires = [
+        {"season": t.season, "label": t.label, "size": t.size, "position": t.position, "count": t.count,
+         "km": costs.tire_km(t, costs.odometer_points(session, vehicle), costs.current_km(session, vehicle)),
+         "tread_mm": costs.last_tread(t)}
+        for t in session.scalars(select(TireSet).where(TireSet.vehicle_id == vehicle.id, TireSet.retired_date.is_(None)))
+        if t.current_mount
+    ]
+    inspection = costs.next_inspection(session, vehicle)
+    sensors["vehicule"] = (
+        costs.current_km(session, vehicle), "km", vehicle.name, "mdi:car-electric",
+        {
+            "plate": vehicle.plate,
+            "model": " ".join(p for p in (vehicle.make, vehicle.model) if p) or None,
+            "purchase_date": vehicle.purchase_date.isoformat() if vehicle.purchase_date else None,
+            "next_inspection": inspection.isoformat() if inspection else None,
+            "tires": tires,
+            "alerts": [{"date": a.when.isoformat(), "text": a.text, "overdue": a.overdue} for a in alerts[:6]],
+        },
+    )
     return sensors
 
 

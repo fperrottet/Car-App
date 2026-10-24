@@ -26,6 +26,27 @@ Add-on Home Assistant pour suivre tous les frais d'une voiture électrique : dé
 
 Réglages sur la page **Véhicule** : entité de l'odomètre, adresse d'EVCC (par exemple `http://192.168.1.20:7070`) et, si plusieurs voitures partagent la borne, le nom du véhicule dans EVCC ; date de 1re immatriculation, consommation et prix de l'essence de référence, entités de la batterie si la recherche automatique ne les trouve pas.
 
+## Carte pour un tableau de bord Home Assistant
+
+L'add-on copie à chaque démarrage la carte `car-costs-card.js` dans le dossier `www` de Home Assistant. Elle affiche la voiture, la charge et l'autonomie, la santé de la batterie (SoH, historique, chaque cellule), les coûts et un diagnostic (12 V, pneus, expertise, rappels).
+
+1. Si le dossier `www` n'existait pas encore, redémarre Home Assistant une fois (**Paramètres > Système > Redémarrer**) pour qu'il serve `/local/`.
+2. **Paramètres > Tableaux de bord**, menu ⋮ > **Ressources** > **Ajouter une ressource** : URL `/local/car-costs-card.js?v=0.4.0`, type **Module JavaScript**. Le menu Ressources n'apparaît que si le **mode avancé** est activé dans ton profil utilisateur.
+3. Dans un tableau de bord : **Ajouter une carte**, cherche « Frais de voiture », ou en YAML :
+
+```yaml
+type: custom:car-costs-card
+# Facultatif : imposer des entités si la recherche automatique se trompe
+entities:
+  soc: sensor.parking_216980_v_b_soc
+  range: sensor.parking_216980_v_b_range_est
+  charging: sensor.parking_216980_v_c_charging
+  aux12v: sensor.parking_216980_v_b_12v_voltage
+  tire_health: sensor.parking_216980_tire_health
+```
+
+Après une mise à jour de l'add-on, change le `?v=` de la ressource (ou vide le cache du navigateur) pour charger la nouvelle carte.
+
 ## Installation dans Home Assistant
 
 1. Dans HA : **Paramètres > Modules complémentaires > Boutique des modules complémentaires**.
