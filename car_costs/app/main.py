@@ -64,6 +64,8 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             session.add_all(Category(name=n, kind=k) for n, k in DEFAULT_CATEGORIES)
             session.commit()
 
+    background: set[asyncio.Task] = set()
+
     def run_sync() -> None:
         with Sessions() as session:
             sync.run_sync(session)
@@ -233,6 +235,10 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 )
             session.add(vehicle)
             session.commit()
+        if sync_interval:
+            # Réglages modifiés : on synchronise tout de suite, sans attendre l'heure suivante.
+            background.add(task := asyncio.create_task(asyncio.to_thread(run_sync)))
+            task.add_done_callback(background.discard)
         return redirect(request, "/")
 
     @app.post("/vehicle/readings")

@@ -28,7 +28,7 @@
       {{ m.field("evcc_url", "Adresse d'EVCC", vehicle.evcc_url if vehicle else "", hint="Par exemple http://192.168.1.20:7070, la même que dans ton navigateur") }}
       {{ m.field("evcc_vehicle", "Véhicule EVCC", vehicle.evcc_vehicle if vehicle else "", hint="Vide : toutes les sessions de la borne") }}
     </div>
-    <small>L'odomètre et les sessions de charge sont importés automatiquement toutes les heures.</small>
+    <small>Import automatique au démarrage, après chaque enregistrement de cette page, puis toutes les heures. Le bouton « Synchroniser maintenant » sert seulement à forcer un import.</small>
   </fieldset>
   <button>Enregistrer</button>
 </form>

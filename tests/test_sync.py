@@ -121,3 +121,25 @@ def test_existing_database_gets_new_columns(tmp_path):
     with TestClient(create_app(tmp_path, sync_interval=None)) as client:
         assert client.get("/vehicle").status_code == 200
         assert client.get("/charging").status_code == 200
+
+
+def test_vehicle_filter_matches_title_and_reports_ignored(db, monkeypatch):
+    session, vehicle = db
+    vehicle.evcc_vehicle = "citigo"
+    sessions = [
+        {"id": 10, "created": "2026-05-01T18:00:00+02:00", "vehicle": "Skoda Citigo e iV", "chargedEnergy": 12.0, "price": 2.0},
+        {"id": 11, "created": "2026-05-02T18:00:00+02:00", "vehicle": "", "chargedEnergy": 8.0, "price": 1.0},
+        {"id": 12, "created": "2026-05-03T18:00:00+02:00", "vehicle": "Tesla invité", "chargedEnergy": 30.0, "price": 6.0},
+    ]
+    monkeypatch.setattr(sync, "fetch_json", fake_fetch({"/api/sessions": sessions}))
+    sync.run_sync(session, NOW, ha=None)
+    assert sorted(r.evcc_id for r in session.query(ChargingSession)) == [10, 11]
+    status = sync.get_settings(session)["sync_evcc"]
+    assert "2 sessions importées sur 3 reçues" in status and "Tesla invité" in status
+
+
+def test_unexpected_evcc_answer_is_an_error(db, monkeypatch):
+    session, _ = db
+    monkeypatch.setattr(sync, "fetch_json", fake_fetch({"/api/sessions": {"error": "database offline"}}))
+    sync.run_sync(session, NOW, ha=None)
+    assert "database offline" in sync.get_settings(session)["sync_evcc"]
