@@ -21,11 +21,35 @@
     </div>
     <small>Pour un changement de prime au renouvellement, termine ce contrat et crée-en un nouveau : les échéances passées gardent ainsi leur montant.</small>
   </fieldset>
+  <fieldset>
+    <legend>Couvertures et options</legend>
+    <input type="hidden" name="cov_count" value="{{ coverage_rows|length }}">
+    <datalist id="coverage-names">{% for n in coverage_names %}<option value="{{ n }}">{% endfor %}</datalist>
+    <div class="table-scroll">
+    <table class="coverages">
+      <thead><tr><th>Couverture</th><th>Retenue</th><th class="num">Prime CHF</th><th class="num">Franchise CHF</th><th>Détails (somme assurée, limites...)</th></tr></thead>
+      <tbody>
+        {% for row in coverage_rows %}
+        <tr>
+          <td><input name="cov_name_{{ loop.index0 }}" value="{{ row.name }}" list="coverage-names" placeholder="Casco partielle..." aria-label="Couverture"></td>
+          <td><input type="checkbox" name="cov_included_{{ loop.index0 }}" value="1"{% if row.included %} checked{% endif %} aria-label="Retenue"></td>
+          <td><input name="cov_premium_{{ loop.index0 }}" value="{{ row.premium }}" inputmode="decimal" class="num" aria-label="Prime"></td>
+          <td><input name="cov_deductible_{{ loop.index0 }}" value="{{ row.deductible }}" inputmode="decimal" class="num" aria-label="Franchise"></td>
+          <td><input name="cov_notes_{{ loop.index0 }}" value="{{ row.notes }}" aria-label="Détails"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      {% if coverage_total %}<tfoot><tr><td>Total des couvertures retenues</td><td></td><td class="num">{{ coverage_total|money }}</td><td colspan="2"></td></tr></tfoot>{% endif %}
+    </table>
+    </div>
+    <small>Décoche une ligne pour garder une option proposée mais non prise (utile pour comparer des offres). Enregistre pour obtenir de nouvelles lignes vides. La prime totale du contrat reste celle du champ « Prime » ci-dessus.</small>
+  </fieldset>
   <div class="grid">
-    {{ m.textarea("coverage", "Couverture", contract.coverage if contract else "") }}
+    {{ m.textarea("coverage", "Couverture (texte libre)", contract.coverage if contract else "") }}
     {{ m.textarea("notes", "Notes", contract.notes if contract else "") }}
   </div>
   {{ m.attachments(documents, "/contracts/" ~ contract.id if contract else "/contracts") }}
+  <small class="muted">Joins ici la police, les conditions générales (CGA) et les éventuelles offres, en PDF.</small>
   <div class="actions">
     <button>Enregistrer</button>
     <a href="{{ base }}/contracts">Annuler</a>

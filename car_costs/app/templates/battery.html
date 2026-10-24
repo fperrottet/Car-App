@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>Santé de la batterie</h1>
+  <form method="post" action="{{ base }}/sync"><input type="hidden" name="back" value="/battery"><button class="secondary">Synchroniser maintenant</button></form>
+</header>
+<p class="muted">Relevé une fois par jour depuis OVMS (via Home Assistant). Dernière lecture : {{ status.get("sync_battery") or "pas encore lancée" }}.</p>
+
+{% if history %}
+{% set last = history[0] %}
+<section class="tiles">
+  <div class="tile">
+    <span>SoH de la batterie</span>
+    <strong>{{ "%.1f %%"|format(last[1]) if last[1] is not none else "–" }}</strong>
+    <small>relevé du {{ last[0]|fdate }}</small>
+  </div>
+  {% if cells %}
+  {% set avg = (cells|sum) / (cells|length) %}
+  <div class="tile">
+    <span>Cellules ({{ cells|length }})</span>
+    <strong>{{ "%.1f %%"|format(avg) }}</strong>
+    <small>moyenne · min {{ "%.1f"|format(cells|min) }} (cellule {{ cells.index(cells|min) + 1 }}) · max {{ "%.1f"|format(cells|max) }}</small>
+  </div>
+  <div class="tile">
+    <span>Écart entre cellules</span>
+    <strong>{{ "%.1f"|format((cells|max) - (cells|min)) }} pts</strong>
+    <small>un écart qui grandit signale une cellule qui vieillit plus vite</small>
+  </div>
+  {% endif %}
+</section>
+{% if soh_chart %}<section><div class="card chart-card">{{ soh_chart|safe }}</div></section>{% endif %}
+{% if cells_chart %}<section><div class="card chart-card">{{ cells_chart|safe }}</div></section>{% endif %}
+{% else %}
+<p class="note">Aucune valeur de SoH lue pour l'instant. Regarde ci-dessous les entités trouvées dans Home Assistant ; si la bonne n'est pas reconnue, indique-la sur la page <a href="{{ base }}/vehicle">Véhicule</a>.</p>
+{% endif %}
+
+{% if modules %}
+<section>
+  <h2>Historique par module (OVMS)</h2>
+  <p class="muted">Valeurs conservées par la voiture, de la plus ancienne à la plus récente.</p>
+  <table>
+    <thead><tr><th>Entité</th><th>SoH successifs (%)</th></tr></thead>
+    <tbody>
+      {% for eid, values in modules.items() %}
+      <tr><td class="mono">{{ eid }}</td><td>{{ values|join(" · ") if values else "illisible" }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<details class="card">
+  <summary><strong>Entités Home Assistant utilisées</strong></summary>
+  <ul class="status">
+    <li><span>SoH global</span> <span class="mono">{{ entities.get("soh") or "non trouvée" }}</span></li>
+    <li><span>SoH par cellule</span> <span class="mono">{{ entities.get("cells") or "non trouvée" }}</span></li>
+  </ul>
+  {% if entities.get("seen") %}
+  <p class="muted">Toutes les entités contenant « soh » :</p>
+  <table>
+    <thead><tr><th>Entité</th><th>État</th></tr></thead>
+    <tbody>
+      {% for eid, state in entities.seen %}<tr><td class="mono">{{ eid }}</td><td>{{ state }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  <p class="muted">Recherche automatique des métriques OVMS <span class="mono">xvu.b.soh.charge</span>, <span class="mono">xvu.b.c.soh</span> et <span class="mono">xvu.b.hist.soh.mod.*</span>. Tu peux forcer une entité sur la page <a href="{{ base }}/vehicle">Véhicule</a>.</p>
+</details>
+
+{% if history|length > 1 %}
+<details class="card">
+  <summary><strong>Tous les relevés ({{ history|length }})</strong></summary>
+  <table>
+    <thead><tr><th>Date</th><th class="num">SoH</th><th class="num">Cellule min</th><th class="num">Moyenne</th></tr></thead>
+    <tbody>
+      {% for d, soh, c in history %}
+      <tr><td>{{ d|fdate }}</td><td class="num">{{ "%.1f"|format(soh) if soh is not none else "" }}</td>
+        <td class="num">{{ "%.1f"|format(c|min) if c else "" }}</td><td class="num">{{ "%.1f"|format((c|sum) / (c|length)) if c else "" }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+{% endblock %}

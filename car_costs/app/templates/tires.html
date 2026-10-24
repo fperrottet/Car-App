@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>Pneus</h1>
+  <a class="button" href="{{ base }}/tires/new">Nouveaux pneus</a>
+</header>
+{% if mounted %}
+<p class="muted">Montés actuellement :
+  {% for r in mounted %}{{ r.set.size or r.set.label }} ({{ r.set.season }}, {{ r.set.position }}){% if not loop.last %} · {% endif %}{% endfor %}
+</p>
+{% endif %}
+
+{% macro tire_table(rows, empty) %}
+{% if rows %}
+<table>
+  <thead><tr><th>Pneus</th><th>Saison</th><th>Taille</th><th>Place</th><th>Achat</th><th class="num">Km parcourus</th><th class="num">Sculpture</th></tr></thead>
+  <tbody>
+    {% for r in rows %}
+    {% set s = r.set %}
+    <tr>
+      <td><a href="{{ base }}/tires/{{ s.id }}">{{ (s.brand or "") ~ " " ~ (s.model or "") if s.brand or s.model else "Pneus " ~ s.season }}</a> <span class="tag">×{{ s.count }}</span></td>
+      <td>{{ s.season }}</td>
+      <td>{{ s.size or "" }}{% if s.load_speed %} {{ s.load_speed }}{% endif %}</td>
+      <td>{{ s.position }}</td>
+      <td>{{ s.purchase_date|fdate }}</td>
+      <td class="num">{{ r.km|km }}</td>
+      <td class="num">{{ "%.1f mm"|format(r.tread) if r.tread is not none else "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">{{ empty }}</p>
+{% endif %}
+{% endmacro %}
+
+<h2>Montés</h2>
+{{ tire_table(mounted, "Aucun pneu monté enregistré. Ajoute les pneus actuels pour suivre leurs km.") }}
+<h2>En stock</h2>
+{{ tire_table(stored, "Aucun jeu en stock.") }}
+{% if retired %}
+<h2>Usés ou vendus</h2>
+{{ tire_table(retired, "") }}
+{% endif %}
+<p class="muted">Les km sont comptés sur chaque période de montage, d'après les relevés du compteur. Le prix d'achat crée une dépense « Pneus ».</p>
+{% endblock %}

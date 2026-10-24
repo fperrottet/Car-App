@@ -18,23 +18,26 @@ from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from . import charts, costs, sync
+from . import charts, costs, features, sync
 from .db import Base, add_missing_columns, make_engine, make_sessionmaker
 from .models import (
     CATEGORY_KINDS,
+    ADDED_CATEGORIES,
     CONTRACT_KINDS,
+    COVERAGE_NAMES,
     DEFAULT_CATEGORIES,
     PERIODS,
     Category,
     ChargingSession,
     Contract,
+    ContractCoverage,
     Document,
     Expense,
     Maintenance,
     OdometerReading,
     Vehicle,
 )
-from .util import clean, format_date, format_km, format_money, parse_date, parse_int, parse_money
+from .util import add_months, clean, format_date, format_km, format_money, parse_date, parse_float, parse_int, parse_money
 
 HERE = Path(__file__).parent
 log = logging.getLogger("car_costs")
@@ -44,7 +47,11 @@ templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.filters["money"] = format_money
 templates.env.filters["fdate"] = format_date
 templates.env.filters["km"] = format_km
-templates.env.filters["amount"] = lambda cents: "" if cents is None else f"{cents / 100:.2f}"
+def format_amount(cents: int | None) -> str:
+    return "" if cents is None else f"{cents / 100:.2f}"
+
+
+templates.env.filters["amount"] = format_amount
 templates.env.filters["iso"] = lambda d: d.isoformat() if d else ""
 templates.env.filters["options"] = lambda items, attr="name": [(i.id, getattr(i, attr)) for i in items]
 templates.env.filters["zip_self"] = lambda items: [(i, i) for i in items]
@@ -62,7 +69,9 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
     with Sessions() as session:
         if not session.scalar(select(func.count(Category.id))):
             session.add_all(Category(name=n, kind=k) for n, k in DEFAULT_CATEGORIES)
-            session.commit()
+        known = set(session.scalars(select(Category.name)))
+        session.add_all(Category(name=n, kind=k) for n, k in ADDED_CATEGORIES if n not in known)
+        session.commit()
 
     background: set[asyncio.Task] = set()
 
@@ -171,6 +180,10 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 period, start, label = "year", date(now.year, 1, 1), "Cette année"
             end = date(start.year, 12, 31) if period.isdigit() and int(period) < now.year else now
             summary = costs.summarize(session, vehicle, start, end)
+            fuel = [
+                r for r in costs.savings(session, vehicle, sync.load_fuel_index(session), now)
+                if r.start <= end and add_months(r.start, 1) > start  # mois qui touchent la période
+            ]
             return render(
                 request,
                 "dashboard.html",
@@ -181,6 +194,8 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 years=years,
                 reminders=costs.reminders(session, vehicle, now),
                 km_now=costs.current_km(session, vehicle),
+                saved_cents=sum(r.saved_cents for r in fuel) if fuel else None,
+                petrol_cents=sum(r.petrol_cents for r in fuel),
                 chart=charts.cost_and_km_chart(costs.monthly(session, vehicle, now)),
             )
 
@@ -229,6 +244,14 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 vehicle.evcc_url = clean(form.get("evcc_url"))
                 if vehicle.evcc_url and not vehicle.evcc_url.startswith(("http://", "https://")):
                     vehicle.evcc_url = "http://" + vehicle.evcc_url
+                vehicle.first_registration_date = parse_date(form.get("first_registration_date"))
+                vehicle.inspection_intervals = clean(form.get("inspection_intervals"))
+                vehicle.fuel_consumption_l100 = parse_float(form.get("fuel_consumption_l100"))
+                vehicle.fuel_price_ref = parse_float(form.get("fuel_price_ref"))
+                vehicle.fuel_price_ref_date = parse_date(form.get("fuel_price_ref_date"))
+                vehicle.soh_entity = clean(form.get("soh_entity"))
+                vehicle.cell_soh_entity = clean(form.get("cell_soh_entity"))
+                vehicle.notes = clean(form.get("notes"))
             except ValueError as exc:
                 return render(
                     request, "vehicle.html", vehicle=vehicle, readings=[], today=today(), status={}, form=form, error=str(exc)
@@ -462,12 +485,55 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             contracts = list(session.scalars(select(Contract).order_by(Contract.end_date.is_(None), Contract.start_date.desc())))
             return render(request, "contracts.html", contracts=contracts, today=today(), periods=PERIODS)
 
+    def coverage_rows(contract: Contract | None, form) -> list[dict]:
+        """Lignes du tableau des couvertures : existantes puis 3 vides."""
+        if form:
+            count = int(form.get("cov_count") or 0)
+            return [
+                {k: form.get(f"cov_{k}_{i}", "") for k in ("name", "premium", "deductible", "notes", "included")}
+                for i in range(count)
+            ]
+        rows = [
+            {
+                "name": c.name,
+                "premium": format_amount(c.premium_cents),
+                "deductible": format_amount(c.deductible_cents),
+                "notes": c.notes or "",
+                "included": "1" if c.included else "",
+            }
+            for c in (contract.coverages if contract and contract.id else [])
+        ]
+        return rows + [{"name": "", "premium": "", "deductible": "", "notes": "", "included": "1"} for _ in range(3)]
+
+    def read_coverages(form) -> list[ContractCoverage]:
+        items = []
+        for i in range(int(form.get("cov_count") or 0)):
+            name = clean(form.get(f"cov_name_{i}"))
+            if not name:
+                continue
+            items.append(
+                ContractCoverage(
+                    position=len(items),
+                    name=name,
+                    included=bool(form.get(f"cov_included_{i}")),
+                    premium_cents=parse_money(form.get(f"cov_premium_{i}")),
+                    deductible_cents=parse_money(form.get(f"cov_deductible_{i}")),
+                    notes=clean(form.get(f"cov_notes_{i}")),
+                )
+            )
+        return items
+
     def contract_form(request: Request, session: Session, contract: Contract | None, form=None, error=None):
         return render(
             request,
             "contract_form.html",
             contract=contract,
             kinds=CONTRACT_KINDS,
+            coverage_names=COVERAGE_NAMES,
+            coverage_rows=coverage_rows(contract, form),
+            coverage_total=sum(
+                c.premium_cents or 0 for c in (contract.coverages if contract and contract.id else []) if c.included
+            ),
             periods=list(PERIODS),
             categories=categories(session),
             documents=documents_for(session, contract_id=contract.id) if contract and contract.id else [],
@@ -504,6 +570,7 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                     raise ValueError("Périodicité inconnue")
                 contract.category_id = parse_int(form.get("category_id"))
                 contract.notes = clean(form.get("notes"))
+                contract.coverages = read_coverages(form)
                 session.add(contract)
                 session.flush()
                 # Les échéances automatiques sont recalculées à partir du contrat.
@@ -708,6 +775,16 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             session.commit()
         back = form.get("back") or "/documents"
         return redirect(request, back if back.startswith("/") and not back.startswith("//") else "/documents")
+
+    features.register(
+        app,
+        Sessions=Sessions,
+        render=render,
+        redirect=redirect,
+        get_vehicle=get_vehicle,
+        get_or_404=get_or_404,
+        today=today,
+    )
 
     # ---------------------------------------------------------------- catégories
 

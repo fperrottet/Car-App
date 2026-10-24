@@ -90,3 +90,71 @@ def cost_and_km_chart(months: list[Month]) -> str:
         parts.append(f'<text x="{x(i):.1f}" y="{base_y + 18}" class="tick" text-anchor="middle">{escape(text)}</text>')
     parts.append("</svg>")
     return "".join(parts)
+
+
+def line_chart(points: list, title: str, unit: str) -> str:
+    """Courbe d'une valeur dans le temps (points : liste de (date, valeur))."""
+    if len(points) < 2:
+        return ""
+    height, top, plot_h = 260, 28, 190
+    plot_w = WIDTH - LEFT - RIGHT
+    values = [v for _, v in points]
+    low, high = min(values), max(values)
+    pad = max((high - low) * 0.2, 0.5)
+    lo, hi = math.floor(low - pad), math.ceil(high + pad)
+    first, last = points[0][0], points[-1][0]
+    span = max((last - first).days, 1)
+    x = lambda d: LEFT + plot_w * (d - first).days / span  # noqa: E731
+    y = lambda v: top + plot_h * (1 - (v - lo) / (hi - lo))  # noqa: E731
+    parts = [f'<svg viewBox="0 0 {WIDTH} {height}" role="img" class="chart" aria-label="{escape(title)}">',
+             f'<text x="{LEFT}" y="16" class="chart-title">{escape(title)}</text>']
+    step = max(1, math.ceil((hi - lo) / 5))
+    for t in range(lo, hi + 1, step):
+        parts.append(f'<line x1="{LEFT}" x2="{WIDTH - RIGHT}" y1="{y(t):.1f}" y2="{y(t):.1f}" class="grid"/>')
+        parts.append(f'<text x="{LEFT - 8}" y="{y(t) + 4:.1f}" class="tick" text-anchor="end">{t}</text>')
+    path = " ".join(f"{'M' if i == 0 else 'L'}{x(d):.1f} {y(v):.1f}" for i, (d, v) in enumerate(points))
+    parts.append(f'<path d="{path}" class="line"/>')
+    if len(points) <= 60:
+        for d, v in points:
+            label = f"{d.strftime('%d.%m.%Y')} : {v:.1f} {unit}"
+            parts.append(f'<circle cx="{x(d):.1f}" cy="{y(v):.1f}" r="3" class="dot"><title>{escape(label)}</title></circle>')
+    d, v = points[-1]
+    parts.append(f'<text x="{x(d) - 6:.1f}" y="{y(v) - 10:.1f}" class="value" text-anchor="end">{v:.1f} {escape(unit)}</text>')
+    for d in (first, last):
+        anchor = "start" if d == first else "end"
+        parts.append(f'<text x="{x(d):.1f}" y="{top + plot_h + 20}" class="tick" text-anchor="{anchor}">'
+                     f'{MONTHS[d.month - 1]} {d.year}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def cells_chart(cells: list[float]) -> str:
+    """Une barre par cellule ; la plus faible est mise en évidence."""
+    if not cells:
+        return ""
+    height, top, plot_h = 250, 28, 180
+    plot_w = WIDTH - LEFT - RIGHT
+    slot = plot_w / len(cells)
+    low, high = min(cells), max(cells)
+    # Axe resserré autour des valeurs : les écarts entre cellules sont faibles.
+    lo = math.floor(low - max(1, (high - low) * 0.3))
+    hi = math.ceil(high + 0.5)
+    y = lambda v: top + plot_h * (1 - (v - lo) / (hi - lo))  # noqa: E731
+    parts = [f'<svg viewBox="0 0 {WIDTH} {height}" role="img" class="chart" aria-label="SoH par cellule">',
+             f'<text x="{LEFT}" y="16" class="chart-title">SoH de chaque cellule (%)</text>']
+    step = max(1, math.ceil((hi - lo) / 5))
+    for t in range(lo, hi + 1, step):
+        parts.append(f'<line x1="{LEFT}" x2="{WIDTH - RIGHT}" y1="{y(t):.1f}" y2="{y(t):.1f}" class="grid"/>')
+        parts.append(f'<text x="{LEFT - 8}" y="{y(t) + 4:.1f}" class="tick" text-anchor="end">{t}</text>')
+    weakest = cells.index(low)
+    bar_w = max(slot * 0.7, 1.5)
+    for i, v in enumerate(cells):
+        cls = "bar-km weak" if i == weakest else "bar-km"
+        cx = LEFT + slot * (i + 0.5)
+        parts.append(f'<rect x="{cx - bar_w / 2:.1f}" y="{y(v):.1f}" width="{bar_w:.1f}" height="{top + plot_h - y(v):.1f}" '
+                     f'class="{cls}"><title>Cellule {i + 1} : {v:.1f} %</title></rect>')
+    every = max(1, math.ceil(len(cells) / 21))
+    for i in range(0, len(cells), every):
+        parts.append(f'<text x="{LEFT + slot * (i + 0.5):.1f}" y="{top + plot_h + 18}" class="tick" text-anchor="middle">{i + 1}</text>')
+    parts.append("</svg>")
+    return "".join(parts)

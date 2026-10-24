@@ -9,7 +9,15 @@
     {{ m.field("model", "Modèle", vehicle.model if vehicle else "Citigo e iV") }}
     {{ m.field("plate", "Plaque", vehicle.plate if vehicle else "") }}
     {{ m.field("vin", "N° de châssis (VIN)", vehicle.vin if vehicle else "") }}
+    {{ m.field("first_registration_date", "1re immatriculation", vehicle.first_registration_date|iso if vehicle else "", type="date", hint="Case B de la carte grise") }}
+    {{ m.field("inspection_intervals", "Expertises tous les (ans)", vehicle.inspection_intervals if vehicle and vehicle.inspection_intervals else "5, 3, 2", hint="Fribourg : 5 ans, puis 3, puis tous les 2 ans") }}
   </div>
+  <label class="wide notes">Notes (tout le reste)
+    <textarea name="notes" rows="8" placeholder="Infos souvent demandées pour une offre d'assurance :
+N° de matricule (case 18) et réception par type (case 24) · prix catalogue et options · puissance kW, poids total
+Couleur · nombre de places · km par an · lieu de stationnement (garage, place couverte) · usage (privé, trajets)
+Détenteur et conducteur principal · conducteurs de moins de 25 ans · sinistres des 5 dernières années">{{ form.get("notes", vehicle.notes if vehicle and vehicle.notes else "") }}</textarea>
+  </label>
   <fieldset>
     <legend>Achat et dépréciation</legend>
     <div class="grid">
@@ -30,6 +38,21 @@
     </div>
     <small>Import automatique au démarrage, après chaque enregistrement de cette page, puis toutes les heures. Le bouton « Synchroniser maintenant » sert seulement à forcer un import.</small>
   </fieldset>
+  <fieldset>
+    <legend>Comparaison avec une voiture à essence</legend>
+    <div class="grid">
+      {{ m.field("fuel_consumption_l100", "Consommation (l/100 km)", vehicle.fuel_consumption_l100 if vehicle and vehicle.fuel_consumption_l100 else "", attrs='inputmode="decimal" placeholder="5.5"', hint="Citigo essence : environ 5 à 5,5 en réel") }}
+      {{ m.field("fuel_price_ref", "Prix de l'essence (CHF/l)", vehicle.fuel_price_ref if vehicle and vehicle.fuel_price_ref else "", attrs='inputmode="decimal" placeholder="1.75"', hint="Sans plomb 95 à une station de la région") }}
+      {{ m.field("fuel_price_ref_date", "Relevé le", vehicle.fuel_price_ref_date|iso if vehicle else "", type="date", hint="Les autres mois suivent l'indice suisse de l'OFEN") }}
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Santé de la batterie (OVMS)</legend>
+    <div class="grid">
+      {{ m.field("soh_entity", "Entité SoH global", vehicle.soh_entity if vehicle else "", hint="Vide : recherche automatique") }}
+      {{ m.field("cell_soh_entity", "Entité SoH par cellule", vehicle.cell_soh_entity if vehicle else "", hint="Vide : recherche automatique") }}
+    </div>
+  </fieldset>
   <button>Enregistrer</button>
 </form>
 
@@ -39,6 +62,9 @@
   <ul class="status">
     <li><span>Odomètre (Home Assistant)</span> {{ status.get("sync_odometer") or "pas encore lancée" }}</li>
     <li><span>Sessions de charge (EVCC)</span> {{ status.get("sync_evcc") or "pas encore lancée" }}</li>
+    <li><span>Prix de l'essence (OFEN)</span> {{ status.get("sync_fuel") or "pas encore lancé" }}</li>
+    <li><span>Batterie (OVMS)</span> {{ status.get("sync_battery") or "pas encore lancée" }}</li>
+    <li><span>Capteurs envoyés à HA</span> {{ status.get("sync_ha_sensors") or "pas encore lancé" }}</li>
   </ul>
   <form method="post" action="{{ base }}/sync"><input type="hidden" name="back" value="/vehicle"><button class="secondary">Synchroniser maintenant</button></form>
 </section>

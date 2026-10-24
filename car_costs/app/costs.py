@@ -1,12 +1,26 @@
-"""Calculs : échéances des contrats, coût total, CHF/km et rappels."""
+"""Calculs : échéances des contrats, coût total, CHF/km, pneus, économies et rappels."""
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import PERIODS, ChargingSession, Contract, Expense, Maintenance, OdometerReading, Vehicle
+from .models import (
+    PERIODS,
+    Category,
+    ChargingSession,
+    Contract,
+    Expense,
+    Inspection,
+    Maintenance,
+    OdometerReading,
+    Reminder,
+    TireMount,
+    TireSet,
+    Vehicle,
+)
 from .util import add_months, format_date, format_km
 
 
@@ -181,44 +195,207 @@ def summarize(session: Session, vehicle: Vehicle, start: date, end: date) -> Sum
     return summary
 
 
+# ---------------------------------------------------------------- expertise
+
+# Canton de Fribourg : 5 ans après la 1re immatriculation, puis 3 ans, puis tous les 2 ans.
+DEFAULT_INSPECTION_INTERVALS = [5, 3, 2]
+
+
+def inspection_intervals(vehicle: Vehicle) -> list[int]:
+    parts = re.split(r"[,;\s]+", vehicle.inspection_intervals or "")
+    values = [int(p) for p in parts if p.isdigit() and int(p) > 0]
+    return values or DEFAULT_INSPECTION_INTERVALS
+
+
+def next_inspection(session: Session, vehicle: Vehicle) -> date | None:
+    """Date de la prochaine expertise, depuis la dernière (ou la 1re immatriculation)."""
+    done = list(
+        session.scalars(select(Inspection.date).where(Inspection.vehicle_id == vehicle.id).order_by(Inspection.date))
+    )
+    base = done[-1] if done else vehicle.first_registration_date
+    if base is None:
+        return None
+    steps = inspection_intervals(vehicle)
+    count = len(done)
+    if done and vehicle.first_registration_date:
+        # Les expertises du précédent propriétaire ne sont souvent pas saisies :
+        # on déduit le rang de la dernière depuis l'âge de la voiture (± 1 an).
+        age = (base - vehicle.first_registration_date).days / 365.25
+        count, total = 0, 0
+        while True:
+            total += steps[min(count, len(steps) - 1)]
+            if total > age + 1:
+                break
+            count += 1
+        count = max(count, 1)
+    return add_months(base, 12 * steps[min(count, len(steps) - 1)])
+
+
+# ---------------------------------------------------------------- pneus
+
+
+def km_at(points: list[tuple[date, int]], day: date) -> int | None:
+    before = [km for d, km in points if d <= day]
+    return max(before) if before else None
+
+
+def mount_km(mount: TireMount, points: list[tuple[date, int]], km_now: int | None) -> int | None:
+    """Km parcourus pendant une période de montage (en cours : jusqu'à aujourd'hui)."""
+    start = mount.mounted_km if mount.mounted_km is not None else km_at(points, mount.mounted_date)
+    if mount.removed_date is None:
+        end = km_now
+    else:
+        end = mount.removed_km if mount.removed_km is not None else km_at(points, mount.removed_date)
+    if start is None or end is None or end < start:
+        return None
+    return end - start
+
+
+def tire_km(tire_set: TireSet, points: list[tuple[date, int]], km_now: int | None) -> int:
+    return sum(mount_km(m, points, km_now) or 0 for m in tire_set.mounts)
+
+
+def last_tread(tire_set: TireSet) -> float | None:
+    measured = [m.tread_mm for m in tire_set.mounts if m.tread_mm is not None]
+    return measured[-1] if measured else None
+
+
+# ---------------------------------------------------------------- économies face à l'essence
+
+# Catégories de dépenses comptées comme « carburant » de la voiture électrique.
+ENERGY_CATEGORIES = ("Recharge externe", "Recharge à domicile")
+
+
+def month_key(day: date) -> str:
+    return f"{day.year:04d}-{day.month:02d}"
+
+
+def fuel_price(index: dict[str, float], vehicle: Vehicle, month: date) -> float | None:
+    """Prix de l'essence (CHF/l) d'un mois : le prix de référence saisi,
+    corrigé par l'évolution de l'indice national depuis sa date."""
+    if not vehicle.fuel_price_ref:
+        return None
+    keys = sorted(index)
+    if not keys:
+        return vehicle.fuel_price_ref
+
+    def value(day: date) -> float:
+        earlier = [k for k in keys if k <= month_key(day)]
+        return index[earlier[-1] if earlier else keys[0]]
+
+    reference = value(vehicle.fuel_price_ref_date) if vehicle.fuel_price_ref_date else index[keys[-1]]
+    return vehicle.fuel_price_ref * value(month) / reference
+
+
 @dataclass
-class Reminder:
+class FuelMonth:
+    start: date
+    km: int | None
+    price: float | None  # CHF/l
+    petrol_cents: int  # ce qu'aurait coûté l'essence
+    electric_cents: int  # recharges EVCC + recharges saisies en dépenses
+
+    @property
+    def saved_cents(self) -> int:
+        return self.petrol_cents - self.electric_cents
+
+
+def savings(session: Session, vehicle: Vehicle, index: dict[str, float], today: date) -> list[FuelMonth]:
+    """Mois par mois : coût de l'électricité contre celui de l'essence pour les mêmes km."""
+    if not vehicle.fuel_consumption_l100 or not vehicle.fuel_price_ref:
+        return []
+    points = odometer_points(session, vehicle)
+    firsts = [d for d in (vehicle.purchase_date, points[0][0] if points else None) if d]
+    if not firsts:
+        return []
+    electric: dict[str, int] = {}
+    for c in session.scalars(select(ChargingSession).where(ChargingSession.vehicle_id == vehicle.id)):
+        key = month_key(c.started)
+        electric[key] = electric.get(key, 0) + (c.cost_cents or 0)
+    expenses = session.scalars(
+        select(Expense)
+        .join(Category, Expense.category_id == Category.id)
+        .where(Expense.vehicle_id == vehicle.id, Category.name.in_(ENERGY_CATEGORIES))
+    )
+    for e in expenses:
+        electric[month_key(e.date)] = electric.get(month_key(e.date), 0) + e.amount_cents
+
+    month = date(min(firsts).year, min(firsts).month, 1)
+    rows: list[FuelMonth] = []
+    while month <= today:
+        end = min(add_months(month, 1) - timedelta(days=1), today)
+        km = km_between(points, month, end)
+        price = fuel_price(index, vehicle, month)
+        petrol = round((km or 0) * vehicle.fuel_consumption_l100 / 100 * price * 100) if price else 0
+        rows.append(FuelMonth(month, km, price, petrol, electric.get(month_key(month), 0)))
+        month = add_months(month, 1)
+    return rows
+
+
+# ---------------------------------------------------------------- rappels
+
+# Seuils de profondeur de sculpture conseillés (le minimum légal est 1,6 mm).
+TREAD_ADVISED_MM = {"été": 3.0, "hiver": 4.0, "4 saisons": 4.0}
+
+
+@dataclass
+class Alert:
     when: date
     text: str
     overdue: bool
 
 
-def reminders(session: Session, vehicle: Vehicle, today: date) -> list[Reminder]:
+def reminders(session: Session, vehicle: Vehicle, today: date) -> list[Alert]:
     """Échéances des 90 prochains jours (et celles dépassées non traitées)."""
     horizon = today + timedelta(days=90)
-    items: list[Reminder] = []
+    items: list[Alert] = []
     for c in session.scalars(select(Contract).where(Contract.vehicle_id == vehicle.id, Contract.end_date.is_not(None))):
         if c.end_date < today:
             continue
         if c.notice_days:
             notice = c.end_date - timedelta(days=c.notice_days)
             if today <= notice <= horizon:
-                items.append(Reminder(notice, f"Dernier délai de résiliation : {c.kind} {c.provider}", False))
+                items.append(Alert(notice, f"Dernier délai de résiliation : {c.kind} {c.provider}", False))
         if c.end_date <= horizon:
-            items.append(Reminder(c.end_date, f"Fin du contrat : {c.kind} {c.provider}", False))
+            items.append(Alert(c.end_date, f"Fin du contrat : {c.kind} {c.provider}", False))
 
+    km_now = current_km(session, vehicle)
     latest = session.scalars(
         select(Maintenance).where(Maintenance.vehicle_id == vehicle.id).order_by(Maintenance.date.desc())
     ).first()
     if latest:
         if latest.next_date and latest.next_date <= horizon:
             items.append(
-                Reminder(latest.next_date, f"Prochain service prévu le {format_date(latest.next_date)}", latest.next_date < today)
+                Alert(latest.next_date, f"Prochain service prévu le {format_date(latest.next_date)}", latest.next_date < today)
             )
-        km_now = current_km(session, vehicle)
         if latest.next_km and km_now is not None and latest.next_km - km_now <= 1500:
             left = latest.next_km - km_now
             text = (
                 f"Service dépassé de {format_km(-left)} km" if left < 0 else f"Service dans {format_km(left)} km"
             ) + f" (prévu à {format_km(latest.next_km)} km)"
-            items.append(Reminder(today, text, left < 0))
-    return sorted(items, key=lambda r: r.when)
+            items.append(Alert(today, text, left < 0))
 
+    inspection = next_inspection(session, vehicle)
+    if inspection and inspection <= today + timedelta(days=120):
+        items.append(Alert(inspection, f"Expertise à prévoir (échéance le {format_date(inspection)})", inspection < today))
+
+    for r in session.scalars(select(Reminder).where(Reminder.vehicle_id == vehicle.id, Reminder.done_date.is_(None))):
+        if r.due_date and r.due_date <= horizon:
+            items.append(Alert(r.due_date, r.title, r.due_date < today))
+        elif r.due_km and km_now is not None and r.due_km - km_now <= 1500:
+            items.append(Alert(today, f"{r.title} (à {format_km(r.due_km)} km)", km_now >= r.due_km))
+
+    sets = list(session.scalars(select(TireSet).where(TireSet.vehicle_id == vehicle.id, TireSet.retired_date.is_(None))))
+    mounted = {s.season for s in sets if s.current_mount}
+    if "été" in mounted and today.month in (10, 11):
+        items.append(Alert(today, "Pneus d'été montés : penser aux pneus d'hiver (d'octobre à Pâques)", False))
+    if "hiver" in mounted and (3, 15) <= (today.month, today.day) <= (5, 15):
+        items.append(Alert(today, "Pneus d'hiver montés : repasser aux pneus d'été", False))
+    for s in sets:
+        tread = last_tread(s)
+        if tread is not None and tread < TREAD_ADVISED_MM.get(s.season, 3.0):
+            items.append(Alert(today, f"Pneus {s.label} : {tread:.1f} mm mesurés, à remplacer bientôt", tread < 1.6))
+    return sorted(items, key=lambda r: r.when)
 
 @dataclass
 class Month:
