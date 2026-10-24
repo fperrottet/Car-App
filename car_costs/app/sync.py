@@ -87,17 +87,29 @@ def sync_odometer(session: Session, vehicle: Vehicle, ha: tuple[str, str], now: 
     return len(per_day)
 
 
-def sync_evcc(session: Session, vehicle: Vehicle) -> int:
+def vehicle_matches(wanted: str, name: str | None) -> bool:
+    """Filtre souple : EVCC enregistre le titre du véhicule (« Skoda Citigo »)
+    alors qu'on connaît souvent son nom de config (« citigo »). Une session
+    sans véhicule identifié est gardée."""
+    name = (name or "").strip().lower()
+    return not wanted or not name or wanted in name or name in wanted
+
+
+def sync_evcc(session: Session, vehicle: Vehicle) -> str:
     """Importe ou met à jour les sessions de charge d'EVCC."""
     data = fetch_json(vehicle.evcc_url.rstrip("/") + "/api/sessions")
     if isinstance(data, dict):  # anciennes versions : {"result": [...]}
-        data = data.get("result") or []
+        if "result" not in data:
+            raise ValueError(f"réponse inattendue d'EVCC : {str(data)[:200]}")
+        data = data["result"] or []
     wanted = (vehicle.evcc_vehicle or "").strip().lower()
 
     existing = {s.evcc_id: s for s in session.scalars(select(ChargingSession))}
-    count = 0
+    kept = 0
+    others: set[str] = set()
     for raw in data:
-        if wanted and (raw.get("vehicle") or "").strip().lower() != wanted:
+        if not vehicle_matches(wanted, raw.get("vehicle")):
+            others.add(raw.get("vehicle"))
             continue
         energy = raw.get("chargedEnergy") or 0
         if not raw.get("id") or not raw.get("created") or energy <= 0:
@@ -115,8 +127,13 @@ def sync_evcc(session: Session, vehicle: Vehicle) -> int:
         item.solar_pct = raw.get("solarPercentage")
         item.odometer_km = round(raw["odometer"]) if raw.get("odometer") else None
         session.add(item)
-        count += 1
-    return count
+        kept += 1
+
+    message = f"{kept} sessions importées sur {len(data)} reçues d'EVCC"
+    if others:
+        names = ", ".join(sorted(f"« {n} »" for n in others))
+        message += f" ; ignorées car d'un autre véhicule que « {vehicle.evcc_vehicle} » : {names}"
+    return message
 
 
 def set_setting(session: Session, key: str, value: str | None) -> None:
@@ -138,11 +155,11 @@ def run_sync(session: Session, now: datetime | None = None, ha: tuple[str, str] 
     ha = ha or home_assistant()
     stamp = now.strftime("%d.%m.%Y %H:%M")
 
-    def attempt(key: str, job, noun: str) -> None:
+    def attempt(key: str, job) -> None:
         try:
-            count = job()
+            result = job()
             session.commit()
-            set_setting(session, key, f"OK le {stamp} : {count} {noun}")
+            set_setting(session, key, f"OK le {stamp} : {result}")
         except Exception as exc:  # réseau, JSON, entité inconnue...
             session.rollback()
             set_setting(session, key, f"Erreur le {stamp} : {exc}")
@@ -153,10 +170,10 @@ def run_sync(session: Session, now: datetime | None = None, ha: tuple[str, str] 
     elif ha is None:
         set_setting(session, "sync_odometer", "pas d'accès à Home Assistant (hors add-on)")
     else:
-        attempt("sync_odometer", lambda: sync_odometer(session, vehicle, ha, now), "jours de relevés")
+        attempt("sync_odometer", lambda: f"{sync_odometer(session, vehicle, ha, now)} jours de relevés")
 
     if not vehicle.evcc_url:
         set_setting(session, "sync_evcc", "non configuré")
     else:
-        attempt("sync_evcc", lambda: sync_evcc(session, vehicle), "sessions")
+        attempt("sync_evcc", lambda: sync_evcc(session, vehicle))
     session.commit()
