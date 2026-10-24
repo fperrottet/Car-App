@@ -35,6 +35,7 @@ Détenteur et conducteur principal · conducteurs de moins de 25 ans · sinistre
       {{ m.field("odometer_entity", "Entité odomètre", vehicle.odometer_entity if vehicle else "sensor.216980_odometer") }}
       {{ m.field("evcc_url", "Adresse d'EVCC", vehicle.evcc_url if vehicle else "", hint="Par exemple http://192.168.1.20:7070, la même que dans ton navigateur") }}
       {{ m.field("evcc_vehicle", "Véhicule EVCC", vehicle.evcc_vehicle if vehicle else "", hint="Vide : toutes les sessions de la borne") }}
+      {{ m.select("estimate_charging", "Recharges d'avant EVCC", [("1", "estimées d'après les km"), ("0", "ignorées")], "0" if vehicle and vehicle.estimate_charging == false else "1") }}
     </div>
     <small>Import automatique au démarrage, après chaque enregistrement de cette page, puis toutes les heures. Le bouton « Synchroniser maintenant » sert seulement à forcer un import.</small>
   </fieldset>
@@ -71,6 +72,11 @@ Détenteur et conducteur principal · conducteurs de moins de 25 ans · sinistre
 <section>
   <h2>Relevés du compteur</h2>
   <p class="muted">Servent au calcul du coût par km. Les km saisis dans les entretiens et les dépenses comptent aussi.</p>
+  <form method="post" action="{{ base }}/vehicle/readings/import" enctype="multipart/form-data" class="inline">
+    <input type="file" name="file" accept=".csv,text/csv" required aria-label="Fichier CSV">
+    <button class="secondary">Importer un CSV</button>
+    <small class="muted">Colonnes : Date ; Km ; kWh/100 km (facultatif, consommation depuis le relevé précédent)</small>
+  </form>
   <form method="post" action="{{ base }}/vehicle/readings" class="inline">
     <input type="date" name="date" value="{{ today|iso }}">
     <input name="km" placeholder="km" inputmode="numeric" required>
@@ -78,11 +84,11 @@ Détenteur et conducteur principal · conducteurs de moins de 25 ans · sinistre
   </form>
   {% if readings %}
   <table>
-    <thead><tr><th>Date</th><th class="num">Km</th><th>Source</th><th></th></tr></thead>
+    <thead><tr><th>Date</th><th class="num">Km</th><th class="num">kWh/100 km</th><th>Source</th><th></th></tr></thead>
     <tbody>
       {% for r in readings %}
       <tr>
-        <td>{{ r.date|fdate }}</td><td class="num">{{ r.km|km }}</td><td>{{ r.source }}</td>
+        <td>{{ r.date|fdate }}</td><td class="num">{{ r.km|km }}</td><td class="num">{{ "%.1f"|format(r.kwh_per_100km) if r.kwh_per_100km is not none else "" }}</td><td>{{ r.source }}</td>
         <td><form method="post" action="{{ base }}/vehicle/readings/{{ r.id }}/delete"><button class="link danger">supprimer</button></form></td>
       </tr>
       {% endfor %}

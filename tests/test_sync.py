@@ -96,6 +96,7 @@ def test_charging_cost_counts_in_summary_and_chart(db):
     session, vehicle = db
     vehicle.purchase_date = date(2026, 8, 1)
     vehicle.purchase_odometer_km = 13000
+    vehicle.estimate_charging = False  # EVCC seul ; l'estimation a ses propres tests
     session.add(ChargingSession(vehicle_id=vehicle.id, evcc_id=9, started=datetime(2026, 9, 5, 20), energy_kwh=15,
                                 cost_cents=300, odometer_km=13500))
     session.add(OdometerReading(vehicle_id=vehicle.id, date=date(2026, 10, 20), km=14000))

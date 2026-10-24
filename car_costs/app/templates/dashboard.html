@@ -32,9 +32,9 @@
   </div>
   {% if summary.energy_kwh %}
   <div class="tile">
-    <span>Recharge à domicile (EVCC)</span>
+    <span>Recharge à domicile{% if summary.estimated_cents %} (EVCC et estimation){% else %} (EVCC){% endif %}</span>
     <strong>{{ summary.charging_cents|money }} CHF</strong>
-    <small>{{ "%.0f"|format(summary.energy_kwh) }} kWh{% if summary.kwh_per_100km %} · {{ "%.1f"|format(summary.kwh_per_100km) }} kWh/100 km{% endif %}{% if summary.km %} · {{ "%.2f"|format(summary.charging_cents / summary.km) }} CHF/100 km{% endif %}</small>
+    <small>{{ "%.0f"|format(summary.energy_kwh) }} kWh{% if summary.kwh_per_100km %} · {{ "%.1f"|format(summary.kwh_per_100km) }} kWh/100 km{% endif %}{% if summary.km %} · {{ "%.2f"|format(summary.charging_cents / summary.km) }} CHF/100 km{% endif %}{% if summary.estimated_cents %}<br>dont {{ summary.estimated_cents|money }} estimés avant EVCC{% endif %}</small>
   </div>
   {% endif %}
   {% if saved_cents is not none %}

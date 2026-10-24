@@ -11,6 +11,40 @@
 </p>
 <p class="muted">Les recharges sur bornes publiques se saisissent comme dépenses (catégorie « Recharge externe »).</p>
 
+<details class="card"{% if estimated and not months %} open{% endif %}>
+  <summary class="row">
+    <strong>Avant EVCC (estimation)</strong>
+    <span class="muted">{% if estimate %}du {{ estimate.start|fdate }} au {{ estimate_until|fdate }} · {{ estimated|sum(attribute="km")|km }} km · <strong>{{ estimated|sum(attribute="cents")|money }} CHF</strong>{% elif vehicle.estimate_charging == false %}désactivée{% else %}indique un tarif du kWh ci-dessous{% endif %}</span>
+  </summary>
+  <p class="muted">Pour chaque jour sans EVCC : km du jour (répartis entre deux relevés du compteur) × consommation relevée sur la période (sinon moyenne du même mois) ÷ {{ "%.0f"|format(efficiency * 100) }} % de rendement de charge × prix du kWh à cette date. Importe tes anciens relevés sur la page <a href="{{ base }}/vehicle">Véhicule</a> pour une estimation plus fine.</p>
+  <form method="post" action="{{ base }}/tariffs" class="inline">
+    <span>Prix du kWh à domicile dès le</span>
+    <input type="date" name="start_date" required aria-label="Dès le">
+    <input name="price_per_kwh" placeholder="CHF/kWh, ex. 0.1615" inputmode="decimal" required aria-label="CHF par kWh">
+    <button class="secondary">Ajouter</button>
+  </form>
+  {% if tariffs %}
+  <ul class="status">
+    {% for t in tariffs %}<li><span>dès le {{ t.start_date|fdate }}</span> {{ "%.4f"|format(t.price_per_kwh) }} CHF/kWh
+      <form method="post" action="{{ base }}/tariffs/{{ t.id }}/delete" class="inline-form"><button class="link danger">supprimer</button></form></li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Sans tarif saisi, le prix moyen payé dans EVCC est utilisé.</p>
+  {% endif %}
+  {% if estimated %}
+  <table>
+    <thead><tr><th>Mois</th><th class="num">Km</th><th class="num">kWh/100 km</th><th class="num">kWh à la prise</th><th class="num">CHF</th></tr></thead>
+    <tbody>
+      {% for e in estimated %}
+      <tr><td>{{ e.month.strftime("%m.%Y") }}</td><td class="num">{{ e.km|km }}</td>
+        <td class="num">{{ "%.1f"|format(e.kwh_per_100km) if e.kwh_per_100km else "" }}</td>
+        <td class="num">{{ "%.0f"|format(e.kwh) }}</td><td class="num">{{ e.cents|money }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</details>
+
 {% for m in months %}
 <details{% if loop.first %} open{% endif %} class="card">
   <summary class="row">

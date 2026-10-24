@@ -7,6 +7,14 @@
     <a class="button secondary" href="{{ base }}/expenses.csv">Export CSV</a>
   </div>
 </header>
+<details class="card">
+  <summary>Importer des dépenses (CSV)</summary>
+  <form method="post" action="{{ base }}/expenses/import" enctype="multipart/form-data" class="inline">
+    <input type="file" name="file" accept=".csv,text/csv" required aria-label="Fichier CSV">
+    <button class="secondary">Importer</button>
+  </form>
+  <small class="muted">Même format que l'export : Date ; Montant CHF ; Catégorie ; Type ; Fournisseur ; Description ; Km. Une ligne déjà présente (même date, montant et description) est ignorée ; une catégorie inconnue est créée.</small>
+</details>
 <form method="get" action="{{ base }}/expenses" class="inline">
   <select name="year">
     <option value="">Toutes les années</option>
