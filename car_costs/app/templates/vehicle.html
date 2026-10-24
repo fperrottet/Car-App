@@ -12,6 +12,12 @@
     {{ m.field("first_registration_date", "1re immatriculation", vehicle.first_registration_date|iso if vehicle else "", type="date", hint="Case B de la carte grise") }}
     {{ m.field("inspection_intervals", "Expertises tous les (ans)", vehicle.inspection_intervals if vehicle and vehicle.inspection_intervals else "5, 3, 2", hint="Fribourg : 5 ans, puis 3, puis tous les 2 ans") }}
   </div>
+  <label class="wide notes">Notes (tout le reste)
+    <textarea name="notes" rows="8" placeholder="Infos souvent demandées pour une offre d'assurance :
+N° de matricule (case 18) et réception par type (case 24) · prix catalogue et options · puissance kW, poids total
+Couleur · nombre de places · km par an · lieu de stationnement (garage, place couverte) · usage (privé, trajets)
+Détenteur et conducteur principal · conducteurs de moins de 25 ans · sinistres des 5 dernières années">{{ form.get("notes", vehicle.notes if vehicle and vehicle.notes else "") }}</textarea>
+  </label>
   <fieldset>
     <legend>Achat et dépréciation</legend>
     <div class="grid">

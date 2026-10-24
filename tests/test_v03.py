@@ -263,3 +263,19 @@ def test_tread_can_be_noted_after_automatic_unmount(client):
                                     "mount_date": "2026-04-02", "mount_km": "21000"})
     client.post("/tires/1/tread", data={"tread_mm": "3,6"})
     assert "3.6 mm mesurés" in client.get("/").text
+
+
+def test_contract_coverages_and_vehicle_notes(client):
+    client.post("/contracts/new", data={
+        "kind": "Assurance", "provider": "Mobilière", "start_date": "2026-01-01", "amount": "890", "period": "annuel",
+        "cov_count": "3",
+        "cov_name_0": "Responsabilité civile (RC)", "cov_included_0": "1", "cov_premium_0": "420",
+        "cov_name_1": "Casco partielle", "cov_included_1": "1", "cov_premium_1": "180", "cov_deductible_1": "200",
+        "cov_name_2": "Casco complète (collision)", "cov_premium_2": "390", "cov_deductible_2": "1000",
+    })
+    page = client.get("/contracts/1").text
+    assert "Casco complète (collision)" in page and "1000.00" in page
+    assert "600.00" in page  # total des seules couvertures retenues
+    assert page.count('name="cov_name_') == 6  # 3 lignes + 3 vides
+    client.post("/vehicle", data={"name": "Citigo", "notes": "Matricule 123.456.789"})
+    assert "Matricule 123.456.789" in client.get("/vehicle").text

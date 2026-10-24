@@ -13,7 +13,8 @@
     {% set active = not c.end_date or c.end_date >= today %}
     <tr class="{{ '' if active else 'muted' }}">
       <td><a href="{{ base }}/contracts/{{ c.id }}">{{ c.kind }}</a></td>
-      <td>{{ c.provider }}{% if c.policy_number %} <span class="muted">n° {{ c.policy_number }}</span>{% endif %}</td>
+      <td>{{ c.provider }}{% if c.policy_number %} <span class="muted">n° {{ c.policy_number }}</span>{% endif %}
+        {% set kept = c.coverages|selectattr("included")|map(attribute="name")|list %}{% if kept %}<br><small class="muted">{{ kept|join(" · ") }}</small>{% endif %}</td>
       <td>{{ c.start_date|fdate }} → {{ c.end_date|fdate if c.end_date else "indéterminée" }}</td>
       <td class="num">{% if c.amount_cents %}{{ c.amount_cents|money }} / {{ c.period }}{% endif %}</td>
       <td>{{ "en cours" if active else "terminé" }}</td>

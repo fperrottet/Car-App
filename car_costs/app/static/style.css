@@ -89,3 +89,11 @@ details.card table { margin-top: 10px; }
 .presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .tiles + table, .tiles + section { margin-top: 12px; }
+.table-scroll { overflow-x: auto; }
+table.coverages { min-width: 640px; }
+table.coverages input:not([type=checkbox]) { width: 100%; }
+table.coverages input.num { text-align: right; }
+label.notes { margin-top: 12px; }
+table.coverages th:nth-child(1) { width: 32%; }
+table.coverages th:nth-child(2) { width: 70px; }
+table.coverages th:nth-child(3), table.coverages th:nth-child(4) { width: 120px; }

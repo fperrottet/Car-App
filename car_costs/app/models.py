@@ -61,6 +61,8 @@ class Vehicle(Base):
     # Entités HA de la santé batterie (vide : recherche automatique des métriques OVMS).
     soh_entity: Mapped[str | None] = mapped_column(String(200))
     cell_soh_entity: Mapped[str | None] = mapped_column(String(200))
+    # Tout le reste (n° matricule, prix catalogue, options...) en texte libre.
+    notes: Mapped[str | None] = mapped_column(Text)
 
 
 class Category(Base):
@@ -93,10 +95,44 @@ class Contract(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
     category: Mapped[Category | None] = relationship()
+    coverages: Mapped[list["ContractCoverage"]] = relationship(
+        cascade="all, delete-orphan", order_by="ContractCoverage.position"
+    )
 
     @property
     def label(self) -> str:
         return f"{self.kind} {self.provider}"
+
+
+# Couvertures usuelles d'une assurance auto suisse (suggestions du formulaire).
+COVERAGE_NAMES = [
+    "Responsabilité civile (RC)",
+    "Casco partielle",
+    "Casco complète (collision)",
+    "Accidents des occupants",
+    "Assistance et dépannage",
+    "Faute grave",
+    "Protection du bonus",
+    "Dommages de parking",
+    "Effets personnels",
+    "Batterie et câble de recharge",
+]
+
+
+class ContractCoverage(Base):
+    """Une ligne de la police : RC, casco partielle, casco complète, option...
+    Une ligne non retenue garde le prix proposé pour comparer."""
+
+    __tablename__ = "contract_coverage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contract_id: Mapped[int] = mapped_column(ForeignKey("contract.id", ondelete="CASCADE"))
+    position: Mapped[int] = mapped_column(default=0)
+    name: Mapped[str] = mapped_column(String(200))
+    included: Mapped[bool] = mapped_column(default=True)
+    premium_cents: Mapped[int | None]
+    deductible_cents: Mapped[int | None]
+    notes: Mapped[str | None] = mapped_column(Text)
 
 
 class Maintenance(Base):

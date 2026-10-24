@@ -24,11 +24,13 @@ from .models import (
     CATEGORY_KINDS,
     ADDED_CATEGORIES,
     CONTRACT_KINDS,
+    COVERAGE_NAMES,
     DEFAULT_CATEGORIES,
     PERIODS,
     Category,
     ChargingSession,
     Contract,
+    ContractCoverage,
     Document,
     Expense,
     Maintenance,
@@ -45,7 +47,11 @@ templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.filters["money"] = format_money
 templates.env.filters["fdate"] = format_date
 templates.env.filters["km"] = format_km
-templates.env.filters["amount"] = lambda cents: "" if cents is None else f"{cents / 100:.2f}"
+def format_amount(cents: int | None) -> str:
+    return "" if cents is None else f"{cents / 100:.2f}"
+
+
+templates.env.filters["amount"] = format_amount
 templates.env.filters["iso"] = lambda d: d.isoformat() if d else ""
 templates.env.filters["options"] = lambda items, attr="name": [(i.id, getattr(i, attr)) for i in items]
 templates.env.filters["zip_self"] = lambda items: [(i, i) for i in items]
@@ -245,6 +251,7 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 vehicle.fuel_price_ref_date = parse_date(form.get("fuel_price_ref_date"))
                 vehicle.soh_entity = clean(form.get("soh_entity"))
                 vehicle.cell_soh_entity = clean(form.get("cell_soh_entity"))
+                vehicle.notes = clean(form.get("notes"))
             except ValueError as exc:
                 return render(
                     request, "vehicle.html", vehicle=vehicle, readings=[], today=today(), status={}, form=form, error=str(exc)
@@ -478,12 +485,55 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             contracts = list(session.scalars(select(Contract).order_by(Contract.end_date.is_(None), Contract.start_date.desc())))
             return render(request, "contracts.html", contracts=contracts, today=today(), periods=PERIODS)
 
+    def coverage_rows(contract: Contract | None, form) -> list[dict]:
+        """Lignes du tableau des couvertures : existantes puis 3 vides."""
+        if form:
+            count = int(form.get("cov_count") or 0)
+            return [
+                {k: form.get(f"cov_{k}_{i}", "") for k in ("name", "premium", "deductible", "notes", "included")}
+                for i in range(count)
+            ]
+        rows = [
+            {
+                "name": c.name,
+                "premium": format_amount(c.premium_cents),
+                "deductible": format_amount(c.deductible_cents),
+                "notes": c.notes or "",
+                "included": "1" if c.included else "",
+            }
+            for c in (contract.coverages if contract and contract.id else [])
+        ]
+        return rows + [{"name": "", "premium": "", "deductible": "", "notes": "", "included": "1"} for _ in range(3)]
+
+    def read_coverages(form) -> list[ContractCoverage]:
+        items = []
+        for i in range(int(form.get("cov_count") or 0)):
+            name = clean(form.get(f"cov_name_{i}"))
+            if not name:
+                continue
+            items.append(
+                ContractCoverage(
+                    position=len(items),
+                    name=name,
+                    included=bool(form.get(f"cov_included_{i}")),
+                    premium_cents=parse_money(form.get(f"cov_premium_{i}")),
+                    deductible_cents=parse_money(form.get(f"cov_deductible_{i}")),
+                    notes=clean(form.get(f"cov_notes_{i}")),
+                )
+            )
+        return items
+
     def contract_form(request: Request, session: Session, contract: Contract | None, form=None, error=None):
         return render(
             request,
             "contract_form.html",
             contract=contract,
             kinds=CONTRACT_KINDS,
+            coverage_names=COVERAGE_NAMES,
+            coverage_rows=coverage_rows(contract, form),
+            coverage_total=sum(
+                c.premium_cents or 0 for c in (contract.coverages if contract and contract.id else []) if c.included
+            ),
             periods=list(PERIODS),
             categories=categories(session),
             documents=documents_for(session, contract_id=contract.id) if contract and contract.id else [],
@@ -520,6 +570,7 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                     raise ValueError("Périodicité inconnue")
                 contract.category_id = parse_int(form.get("category_id"))
                 contract.notes = clean(form.get("notes"))
+                contract.coverages = read_coverages(form)
                 session.add(contract)
                 session.flush()
                 # Les échéances automatiques sont recalculées à partir du contrat.
