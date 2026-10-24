@@ -16,8 +16,13 @@ Add-on Home Assistant pour suivre tous les frais d'une voiture électrique : dé
   - sessions de charge depuis l'API d'EVCC (`/api/sessions`), avec le coût calculé par EVCC tel quel.
 - Page Recharges : sessions par mois, kWh, part solaire, coût ; kWh/100 km et CHF/100 km au tableau de bord.
 - Graphique : coût par km cumulé et km parcourus par mois.
+- Pneus : jeux de 2 ou 4 pneus (saison, marque, dimension, indice, DOT), montages et démontages, km parcourus par jeu, sculpture mesurée ; rappel du changement été/hiver et des pneus usés.
+- Économies face à une voiture à essence : km du mois × consommation × prix de l'essence (ton prix de référence, suivi mois par mois par l'indice des prix de l'essence de l'OFEN), moins l'électricité payée.
+- Santé de la batterie : SoH global et SoH de chaque cellule lus chaque jour depuis OVMS via Home Assistant (métriques `xvu.b.soh.charge`, `xvu.b.c.soh`, `xvu.b.hist.soh.mod.*`, recherche automatique des entités), courbe dans le temps et cellule la plus faible.
+- Rappels administratifs : expertise calculée depuis la 1re immatriculation (Fribourg : 5 ans, puis 3, puis tous les 2 ans), rappels libres ou périodiques (vignette, garanties, impôt).
+- Capteurs envoyés à Home Assistant à chaque synchronisation : `sensor.frais_voiture_mois`, `_annee`, `_par_km`, `_economie_essence`, `_prochain_rappel`, `_cellule_min`. Ils sont recréés à chaque synchronisation (donc au plus une heure après un redémarrage de HA).
 
-Réglages sur la page **Véhicule** : entité de l'odomètre, adresse d'EVCC (par exemple `http://192.168.1.20:7070`) et, si plusieurs voitures partagent la borne, le nom du véhicule dans EVCC.
+Réglages sur la page **Véhicule** : entité de l'odomètre, adresse d'EVCC (par exemple `http://192.168.1.20:7070`) et, si plusieurs voitures partagent la borne, le nom du véhicule dans EVCC ; date de 1re immatriculation, consommation et prix de l'essence de référence, entités de la batterie si la recherche automatique ne les trouve pas.
 
 ## Installation dans Home Assistant
 

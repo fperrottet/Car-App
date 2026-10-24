@@ -1,27 +1,50 @@
-"""Imports automatiques : odomètre depuis Home Assistant, sessions depuis EVCC."""
+"""Imports automatiques (odomètre et batterie depuis Home Assistant, sessions
+d'EVCC, indice du prix de l'essence) et capteurs renvoyés à Home Assistant."""
 
+import csv
+import io
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import ChargingSession, OdometerReading, Setting, Vehicle
+from . import costs
+from .models import BatterySnapshot, ChargingSession, OdometerReading, Setting, Vehicle
 
 MILES_TO_KM = 1.609344
 # Le recorder de HA garde 10 jours d'historique par défaut.
 HISTORY_DAYS = 10
 
 
-def fetch_json(url: str, token: str | None = None, timeout: float = 20):
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+# Indice des prix de l'essence de l'OFEN (base décembre 2020 = 100), mensuel.
+FUEL_INDEX_URL = "https://www.uvek-gis.admin.ch/BFE/ogd/106/ogd106_preise_benzin.csv"
+
+
+def fetch_text(url: str, token: str | None = None, timeout: float = 20, accept: str = "*/*") -> str:
+    request = urllib.request.Request(url, headers={"Accept": accept})
     if token:
         request.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        return response.read().decode("utf-8-sig")
+
+
+def fetch_json(url: str, token: str | None = None, timeout: float = 20):
+    return json.loads(fetch_text(url, token, timeout, accept="application/json"))
+
+
+def post_json(url: str, payload: dict, token: str | None = None, timeout: float = 20) -> None:
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST", headers={"Content-Type": "application/json"}
+    )
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(request, timeout=timeout):
+        pass
 
 
 def home_assistant() -> tuple[str, str] | None:
@@ -136,6 +159,187 @@ def sync_evcc(session: Session, vehicle: Vehicle) -> str:
     return message
 
 
+# ---------------------------------------------------------------- prix de l'essence
+
+
+def parse_fuel_index(text: str) -> dict[str, float]:
+    """CSV de l'OFEN (« Datum,Preis_LIK_indexiert ») -> {"2025-11": 119.0}."""
+    lines = text.strip().splitlines()
+    if not lines:
+        return {}
+    delimiter = ";" if ";" in lines[0] else ","
+    index: dict[str, float] = {}
+    for row in csv.reader(io.StringIO(text), delimiter=delimiter):
+        match = re.match(r"\s*(\d{4})-(\d{2})", row[0]) if len(row) >= 2 else None
+        if not match:
+            continue  # en-tête ou ligne vide
+        try:
+            index[f"{match[1]}-{match[2]}"] = float(row[1].replace(",", "."))
+        except ValueError:
+            continue
+    return index
+
+
+def load_fuel_index(session: Session) -> dict[str, float]:
+    item = session.get(Setting, "fuel_index")
+    try:
+        return json.loads(item.value) if item and item.value else {}
+    except ValueError:
+        return {}
+
+
+def sync_fuel_index(session: Session, today: date) -> str:
+    """Télécharge l'indice au plus une fois par jour (il est mensuel)."""
+    fetched = session.get(Setting, "fuel_index_date")
+    index = load_fuel_index(session)
+    if not (index and fetched and fetched.value == today.isoformat()):
+        index = parse_fuel_index(fetch_text(FUEL_INDEX_URL))
+        if not index:
+            raise ValueError("fichier de l'OFEN vide ou illisible")
+        set_setting(session, "fuel_index", json.dumps(index, sort_keys=True))
+        set_setting(session, "fuel_index_date", today.isoformat())
+    last = max(index)
+    return f"indice OFEN de {min(index)} à {last} ({index[last]:g} points)"
+
+
+# ---------------------------------------------------------------- santé de la batterie (OVMS)
+
+# Métriques OVMS de la VW e-Up / Skoda Citigo e iV, telles qu'elles
+# apparaissent dans les identifiants d'entités HA (points remplacés par _).
+CELL_PATTERNS = ("xvu_b_c_soh", "b_c_soh", "cell_soh")
+SOH_PATTERNS = ("xvu_b_soh_charge", "soh_charge", "v_b_soh", "xvu_b_soh_range", "soh")
+MODULE_PATTERN = "hist_soh_mod"
+SOH_RANGE = (40.0, 110.0)
+
+
+def numbers(value) -> list[float]:
+    """Valeurs numériques d'un état ou d'un attribut (nombre, liste, « 95.1,94.8 »)."""
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, (list, tuple)):
+        return [n for v in value for n in numbers(v)]
+    if isinstance(value, str) and re.fullmatch(r"[\s\[\]\d.,;\-]+", value):
+        return [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", value)]
+    return []
+
+
+def plausible(values: list[float]) -> bool:
+    return bool(values) and all(SOH_RANGE[0] <= v <= SOH_RANGE[1] for v in values)
+
+
+def entity_values(state: dict) -> list[float]:
+    """La plus longue liste plausible de valeurs SoH dans l'état ou les attributs
+    (HA limite l'état à 255 caractères, un tableau peut donc être en attribut)."""
+    candidates = [numbers(state.get("state"))]
+    candidates += [numbers(v) for v in (state.get("attributes") or {}).values()]
+    candidates = [c for c in candidates if plausible(c)]
+    return max(candidates, key=len, default=[])
+
+
+def discover_battery(states: dict[str, dict], vehicle: Vehicle) -> dict:
+    """Trouve les entités SoH (globale, par cellule, historique des modules)."""
+    keys = {eid: eid.lower().replace(".", "_") for eid in states}
+    soh_ids = [e for e in keys if "soh" in keys[e] and "tire" not in keys[e]]
+
+    def pick(patterns, exclude=()) -> str | None:
+        for pattern in patterns:
+            for eid in soh_ids:
+                if pattern in keys[eid] and not any(x in keys[eid] for x in exclude):
+                    return eid
+        return None
+
+    cells = vehicle.cell_soh_entity or pick(CELL_PATTERNS, exclude=(MODULE_PATTERN,))
+    soh = vehicle.soh_entity or pick(SOH_PATTERNS, exclude=(MODULE_PATTERN, "b_c_soh", "cell"))
+    modules = sorted(e for e in soh_ids if MODULE_PATTERN in keys[e])
+    return {"soh": soh, "cells": cells, "modules": modules, "candidates": sorted(soh_ids)}
+
+
+def sync_battery(session: Session, vehicle: Vehicle, ha: tuple[str, str], today: date) -> str:
+    base, token = ha
+    states = {s["entity_id"]: s for s in fetch_json(f"{base}/states", token) if isinstance(s, dict) and "entity_id" in s}
+    found = discover_battery(states, vehicle)
+    soh_values = entity_values(states.get(found["soh"]) or {})
+    soh = soh_values[0] if len(soh_values) == 1 else None
+    cells = entity_values(states.get(found["cells"]) or {})
+    modules = {eid: entity_values(states[eid]) for eid in found["modules"]}
+    seen = [(eid, str(states[eid].get("state"))[:60]) for eid in found["candidates"]]
+    set_setting(session, "battery_entities", json.dumps({**found, "seen": seen}))
+    set_setting(session, "battery_modules", json.dumps(modules))
+    if soh is None and not cells:
+        return f"aucune valeur de SoH trouvée ({len(seen)} entités contenant « soh »)"
+
+    snapshot = session.scalars(
+        select(BatterySnapshot).where(BatterySnapshot.vehicle_id == vehicle.id, BatterySnapshot.date == today)
+    ).first() or BatterySnapshot(vehicle_id=vehicle.id, date=today)
+    snapshot.soh = soh
+    snapshot.cells = json.dumps(cells) if cells else None
+    session.add(snapshot)
+    parts = [f"SoH {soh:g} %" if soh is not None else "SoH global absent"]
+    if cells:
+        parts.append(f"{len(cells)} cellules (min {min(cells):g} %)")
+    return ", ".join(parts)
+
+
+# ---------------------------------------------------------------- capteurs envoyés à HA
+
+SENSOR_PREFIX = "sensor.frais_voiture_"
+
+
+def ha_sensors(session: Session, vehicle: Vehicle, today: date) -> dict[str, tuple]:
+    """Capteurs publiés dans HA : nom -> (état, unité, nom affiché, icône, attributs)."""
+    costs.sync_all_contracts(session, today)
+    since = vehicle.purchase_date or date(today.year, 1, 1)
+    month = costs.summarize(session, vehicle, today.replace(day=1), today)
+    year = costs.summarize(session, vehicle, date(today.year, 1, 1), today)
+    total = costs.summarize(session, vehicle, since, today)
+    sensors: dict[str, tuple] = {
+        "mois": (round(month.total_with_depreciation / 100, 2), "CHF", "Frais voiture ce mois", "mdi:cash", {}),
+        "annee": (round(year.total_with_depreciation / 100, 2), "CHF", "Frais voiture cette année", "mdi:cash-multiple", {}),
+    }
+    if total.per_km_cents is not None:
+        sensors["par_km"] = (
+            round(total.per_km_cents / 100, 3), "CHF/km", "Frais voiture par km", "mdi:counter",
+            {"depuis": since.isoformat(), "km": total.km},
+        )
+    rows = costs.savings(session, vehicle, load_fuel_index(session), today)
+    if rows:
+        saved = sum(r.saved_cents for r in rows)
+        sensors["economie_essence"] = (
+            round(saved / 100, 2), "CHF", "Économie face à l'essence", "mdi:gas-station-off",
+            {"depuis": rows[0].start.isoformat()},
+        )
+    alerts = costs.reminders(session, vehicle, today)
+    if alerts:
+        first = alerts[0]
+        sensors["prochain_rappel"] = (
+            first.text[:250], None, "Frais voiture : prochain rappel", "mdi:calendar-alert",
+            {"date": first.when.isoformat(), "en_retard": first.overdue, "nombre": len(alerts)},
+        )
+    latest = session.scalars(
+        select(BatterySnapshot).where(BatterySnapshot.vehicle_id == vehicle.id).order_by(BatterySnapshot.date.desc())
+    ).first()
+    if latest and latest.cells:
+        cells = json.loads(latest.cells)
+        sensors["cellule_min"] = (
+            min(cells), "%", "Batterie : cellule la plus faible", "mdi:battery-heart-variant",
+            {"moyenne": round(sum(cells) / len(cells), 2), "max": max(cells), "cellule": cells.index(min(cells)) + 1},
+        )
+    return sensors
+
+
+def push_sensors(session: Session, vehicle: Vehicle, ha: tuple[str, str], today: date) -> str:
+    base, token = ha
+    sensors = ha_sensors(session, vehicle, today)
+    for name, (state, unit, label, icon, extra) in sensors.items():
+        attributes = {"friendly_name": label, "icon": icon, **extra}
+        if unit:
+            attributes["unit_of_measurement"] = unit
+        post_json(f"{base}/states/{SENSOR_PREFIX}{name}", {"state": state, "attributes": attributes}, token)
+    return f"{len(sensors)} capteurs {SENSOR_PREFIX}* mis à jour"
+
+
 def set_setting(session: Session, key: str, value: str | None) -> None:
     item = session.get(Setting, key) or Setting(key=key)
     item.value = value
@@ -147,7 +351,7 @@ def get_settings(session: Session) -> dict[str, str | None]:
 
 
 def run_sync(session: Session, now: datetime | None = None, ha: tuple[str, str] | None = None) -> None:
-    """Lance les deux imports et note le résultat de chacun."""
+    """Lance les imports, publie les capteurs et note le résultat de chacun."""
     now = now or datetime.now()
     vehicle = session.scalars(select(Vehicle).order_by(Vehicle.id)).first()
     if vehicle is None:
@@ -176,4 +380,17 @@ def run_sync(session: Session, now: datetime | None = None, ha: tuple[str, str] 
         set_setting(session, "sync_evcc", "non configuré")
     else:
         attempt("sync_evcc", lambda: sync_evcc(session, vehicle))
+
+    if not (vehicle.fuel_consumption_l100 and vehicle.fuel_price_ref):
+        set_setting(session, "sync_fuel", "non configuré")
+    else:
+        attempt("sync_fuel", lambda: sync_fuel_index(session, now.date()))
+
+    if ha is None:
+        for key in ("sync_battery", "sync_ha_sensors"):
+            set_setting(session, key, "pas d'accès à Home Assistant (hors add-on)")
+    else:
+        attempt("sync_battery", lambda: sync_battery(session, vehicle, ha, now.date()))
+        # En dernier, pour publier des valeurs à jour.
+        attempt("sync_ha_sensors", lambda: push_sensors(session, vehicle, ha, now.date()))
     session.commit()

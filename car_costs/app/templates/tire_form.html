@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>{{ "Pneus " ~ item.label if item else "Nouveaux pneus" }}</h1>
+<form method="post" action="{{ base }}/tires/{{ item.id if item else 'new' }}" class="card">
+  <div class="grid">
+    {{ m.select("season", "Saison", seasons|zip_self, item.season if item else (last.season if last else "été")) }}
+    {{ m.field("brand", "Marque", item.brand if item else "") }}
+    {{ m.field("model", "Modèle", item.model if item else "") }}
+    {{ m.field("size", "Dimension", item.size if item else (last.size if last else ""), hint="Par exemple 165/70 R14") }}
+    {{ m.field("load_speed", "Indice de charge et vitesse", item.load_speed if item else (last.load_speed if last else ""), hint="Par exemple 81T") }}
+    {{ m.field("dot", "DOT (date de fabrication)", item.dot if item else "", hint="4 chiffres semaine+année, par ex. 2325") }}
+    {{ m.select("count", "Nombre", [(4, "4 pneus"), (2, "2 pneus")], item.count if item else 4) }}
+    {{ m.select("position", "Place (si 2 pneus)", positions|zip_self, item.position if item else "avant") }}
+    {{ m.field("purchase_date", "Date d'achat", item.purchase_date|iso if item else today|iso, type="date") }}
+    {{ m.field("amount", "Prix payé (CHF)", item.expense.amount_cents|amount if item and item.expense else "", attrs='inputmode="decimal"', hint="Crée la dépense « Pneus » (montage compris)") }}
+    {{ m.field("vendor", "Garage ou magasin", item.expense.vendor if item and item.expense else "") }}
+  </div>
+  {% if not item %}
+  <fieldset>
+    <legend>Montage</legend>
+    <div class="grid">
+      <label><span><input type="checkbox" name="mount_now" value="1" checked> Montés sur la voiture</span></label>
+      {{ m.field("mount_date", "Date du montage", today|iso, type="date") }}
+      {{ m.field("mount_km", "Km au montage", km_now if km_now is not none else "", attrs='inputmode="numeric"', hint="Vide : déduit des relevés du compteur") }}
+    </div>
+    <small>Les pneus qui occupaient la même place sont démontés automatiquement à cette date.</small>
+  </fieldset>
+  {% endif %}
+  {{ m.textarea("notes", "Notes", item.notes if item else "") }}
+  <div class="actions">
+    <button>Enregistrer</button>
+    <a href="{{ base }}/tires">Annuler</a>
+    {% if item %}
+    <button class="link danger" formaction="{{ base }}/tires/{{ item.id }}/delete" formnovalidate onclick="return confirm('Supprimer ces pneus et leur dépense ?')">Supprimer</button>
+    {% endif %}
+  </div>
+</form>
+
+{% if item %}
+<section>
+  <h2>Périodes de montage</h2>
+  {% if mounts %}
+  <table>
+    <thead><tr><th>Monté le</th><th class="num">Km</th><th>Démonté le</th><th class="num">Km</th><th class="num">Parcourus</th><th class="num">Sculpture</th><th></th></tr></thead>
+    <tbody>
+      {% for mt, km in mounts %}
+      <tr>
+        <td>{{ mt.mounted_date|fdate }}</td><td class="num">{{ mt.mounted_km|km }}</td>
+        <td>{{ mt.removed_date|fdate if mt.removed_date else "en place" }}</td><td class="num">{{ mt.removed_km|km }}</td>
+        <td class="num">{{ km|km }}</td>
+        <td class="num">{{ "%.1f mm"|format(mt.tread_mm) if mt.tread_mm is not none else "" }}</td>
+        <td><form method="post" action="{{ base }}/tires/mounts/{{ mt.id }}/delete"><button class="link danger" onclick="return confirm('Supprimer cette période ?')">supprimer</button></form></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Jamais montés.</p>
+  {% endif %}
+
+  {% if item.current_mount %}
+  <form method="post" action="{{ base }}/tires/{{ item.id }}/unmount" class="card">
+    <strong>Démonter</strong>
+    <div class="grid">
+      {{ m.field("date", "Date", today|iso, type="date") }}
+      {{ m.field("km", "Km", km_now if km_now is not none else "", attrs='inputmode="numeric"') }}
+      {{ m.field("tread_mm", "Sculpture mesurée (mm)", "", attrs='inputmode="decimal"', hint="Conseillé : 3 mm en été, 4 mm en hiver") }}
+      <label><span><input type="checkbox" name="retire" value="1"> Usés, ne seront plus remontés</span></label>
+    </div>
+    <div class="actions"><button>Démonter</button></div>
+  </form>
+  {% else %}
+  <form method="post" action="{{ base }}/tires/{{ item.id }}/mount" class="card">
+    <strong>Monter</strong>
+    <div class="grid">
+      {{ m.field("date", "Date", today|iso, type="date") }}
+      {{ m.field("km", "Km", km_now if km_now is not none else "", attrs='inputmode="numeric"') }}
+    </div>
+    <div class="actions">
+      <button>Monter</button>
+      <button class="link" formaction="{{ base }}/tires/{{ item.id }}/retire">{{ "Remettre en stock" if item.retired_date else "Marquer usés ou vendus" }}</button>
+    </div>
+  </form>
+  {% if mounts %}
+  <form method="post" action="{{ base }}/tires/{{ item.id }}/tread" class="inline">
+    <input name="tread_mm" placeholder="mm" inputmode="decimal" aria-label="Sculpture en mm" required>
+    <button class="secondary">Noter la sculpture mesurée</button>
+    <small class="muted">Conseillé : au moins 3 mm en été, 4 mm en hiver (minimum légal 1,6 mm)</small>
+  </form>
+  {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>Modifier le rappel</h1>
+<form method="post" action="{{ base }}/reminders/{{ item.id }}" class="card">
+  <div class="grid">
+    {{ m.field("title", "Titre", item.title, required=True) }}
+    {{ m.field("due_date", "Échéance", item.due_date|iso, type="date") }}
+    {{ m.field("due_km", "Ou à (km)", item.due_km, attrs='inputmode="numeric"') }}
+    {{ m.field("repeat_months", "Répéter tous les (mois)", item.repeat_months, attrs='inputmode="numeric"') }}
+    {{ m.textarea("notes", "Notes", item.notes) }}
+  </div>
+  <div class="actions">
+    <button>Enregistrer</button>
+    <a href="{{ base }}/reminders">Annuler</a>
+    <button class="link danger" formaction="{{ base }}/reminders/{{ item.id }}/delete" formnovalidate onclick="return confirm('Supprimer ce rappel ?')">Supprimer</button>
+  </div>
+</form>
+{% endblock %}

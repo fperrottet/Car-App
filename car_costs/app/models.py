@@ -24,7 +24,13 @@ DEFAULT_CATEGORIES = [
     ("Lavage", "variable"),
     ("Accessoires", "variable"),
     ("Autre", "variable"),
+    ("Expertise", "variable"),
 ]
+# Catégories apparues après la 0.1, ajoutées aux bases existantes si absentes.
+ADDED_CATEGORIES = [("Expertise", "variable")]
+
+TIRE_SEASONS = ["été", "hiver", "4 saisons"]
+TIRE_POSITIONS = ["les 4", "avant", "arrière"]
 
 
 class Vehicle(Base):
@@ -45,6 +51,16 @@ class Vehicle(Base):
     odometer_entity: Mapped[str | None] = mapped_column(String(200))
     evcc_vehicle: Mapped[str | None] = mapped_column(String(100))
     evcc_url: Mapped[str | None] = mapped_column(String(200))
+    first_registration_date: Mapped[date | None]
+    # Années entre deux expertises ; la dernière valeur se répète (Fribourg : 5, 3, puis 2).
+    inspection_intervals: Mapped[str | None] = mapped_column(String(50))
+    # Comparaison avec une voiture à essence équivalente.
+    fuel_consumption_l100: Mapped[float | None]
+    fuel_price_ref: Mapped[float | None]
+    fuel_price_ref_date: Mapped[date | None]
+    # Entités HA de la santé batterie (vide : recherche automatique des métriques OVMS).
+    soh_entity: Mapped[str | None] = mapped_column(String(200))
+    cell_soh_entity: Mapped[str | None] = mapped_column(String(200))
 
 
 class Category(Base):
@@ -175,3 +191,93 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(50), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text)
+
+
+class TireSet(Base):
+    """Un achat de pneus (souvent 2 par 2), suivi sur ses périodes de montage."""
+
+    __tablename__ = "tire_set"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"))
+    season: Mapped[str] = mapped_column(String(20))
+    brand: Mapped[str | None] = mapped_column(String(100))
+    model: Mapped[str | None] = mapped_column(String(100))
+    size: Mapped[str | None] = mapped_column(String(50))
+    load_speed: Mapped[str | None] = mapped_column(String(20))
+    dot: Mapped[str | None] = mapped_column(String(50))
+    count: Mapped[int] = mapped_column(default=4)
+    position: Mapped[str] = mapped_column(String(20), default="les 4")
+    purchase_date: Mapped[date | None]
+    expense_id: Mapped[int | None] = mapped_column(ForeignKey("expense.id", ondelete="SET NULL"))
+    retired_date: Mapped[date | None]
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    mounts: Mapped[list["TireMount"]] = relationship(
+        back_populates="tire_set", cascade="all, delete-orphan", order_by="TireMount.mounted_date"
+    )
+    expense: Mapped[Expense | None] = relationship()
+
+    @property
+    def label(self) -> str:
+        parts = [self.brand, self.model, self.size]
+        return " ".join(p for p in parts if p) or f"Pneus {self.season}"
+
+    @property
+    def current_mount(self) -> "TireMount | None":
+        return next((m for m in self.mounts if m.removed_date is None), None)
+
+
+class TireMount(Base):
+    __tablename__ = "tire_mount"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tire_set_id: Mapped[int] = mapped_column(ForeignKey("tire_set.id", ondelete="CASCADE"))
+    mounted_date: Mapped[date]
+    mounted_km: Mapped[int | None]
+    removed_date: Mapped[date | None]
+    removed_km: Mapped[int | None]
+    tread_mm: Mapped[float | None]
+
+    tire_set: Mapped[TireSet] = relationship(back_populates="mounts")
+
+
+class Inspection(Base):
+    """Expertise (contrôle technique) passée."""
+
+    __tablename__ = "inspection"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"))
+    date: Mapped[date]
+    odometer_km: Mapped[int | None]
+    notes: Mapped[str | None] = mapped_column(Text)
+    expense_id: Mapped[int | None] = mapped_column(ForeignKey("expense.id", ondelete="SET NULL"))
+
+
+class Reminder(Base):
+    """Rappel administratif (vignette, garantie, taxe...), éventuellement périodique."""
+
+    __tablename__ = "reminder"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(200))
+    due_date: Mapped[date | None]
+    due_km: Mapped[int | None]
+    repeat_months: Mapped[int | None]
+    notes: Mapped[str | None] = mapped_column(Text)
+    done_date: Mapped[date | None]
+
+
+class BatterySnapshot(Base):
+    """Relevé quotidien de la santé de la batterie (OVMS via HA)."""
+
+    __tablename__ = "battery_snapshot"
+    __table_args__ = (UniqueConstraint("vehicle_id", "date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"))
+    date: Mapped[date]
+    soh: Mapped[float | None]
+    cells: Mapped[str | None] = mapped_column(Text)  # JSON : SoH de chaque cellule

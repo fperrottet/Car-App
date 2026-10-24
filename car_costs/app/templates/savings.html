@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Économies face à une voiture à essence</h1>
+{% if not rows %}
+<p class="note">Indique sur la page <a href="{{ base }}/vehicle">Véhicule</a> la consommation d'une voiture à essence équivalente (une Citigo essence consomme environ 5 à 5,5 l/100 km en réel) et un prix de l'essence de référence, par exemple celui payé à une station de la région.</p>
+{% else %}
+<section class="tiles">
+  <div class="tile">
+    <span>Économisé depuis le {{ rows[-1].start|fdate }}</span>
+    <strong class="{{ 'good' if saved > 0 }}">{{ saved|money }} CHF</strong>
+    <small>sur l'énergie seulement</small>
+  </div>
+  <div class="tile">
+    <span>Essence évitée</span>
+    <strong>{{ "%.0f"|format(litres) }} l</strong>
+    <small>soit {{ petrol|money }} CHF à {{ "%.1f"|format(vehicle.fuel_consumption_l100) }} l/100 km</small>
+  </div>
+  <div class="tile">
+    <span>Électricité payée</span>
+    <strong>{{ electric|money }} CHF</strong>
+    <small>recharges EVCC + recharges saisies en dépenses</small>
+  </div>
+</section>
+<table>
+  <thead><tr><th>Mois</th><th class="num">Km</th><th class="num">Essence CHF/l</th><th class="num">Coût essence</th><th class="num">Coût électricité</th><th class="num">Économie</th></tr></thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.start.strftime("%m.%Y") }}</td>
+      <td class="num">{{ r.km|km }}</td>
+      <td class="num">{{ "%.2f"|format(r.price) if r.price else "" }}</td>
+      <td class="num">{{ r.petrol_cents|money }}</td>
+      <td class="num">{{ r.electric_cents|money }}</td>
+      <td class="num">{{ r.saved_cents|money }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<p class="muted">
+  Prix de l'essence : ton prix de référence ({{ "%.2f"|format(vehicle.fuel_price_ref) if vehicle.fuel_price_ref else "–" }} CHF/l{% if vehicle.fuel_price_ref_date %} en {{ vehicle.fuel_price_ref_date.strftime("%m.%Y") }}{% endif %}),
+  {% if has_index %}corrigé chaque mois par l'indice suisse des prix de l'essence (OFEN, indice des prix à la consommation).{% else %}constant tant que l'indice de l'OFEN n'a pas été téléchargé.{% endif %}
+  Dernier téléchargement : {{ status.get("sync_fuel") or "pas encore lancé" }}.
+  L'entretien, l'assurance et la dépréciation ne sont pas comparés.
+</p>
+{% endblock %}

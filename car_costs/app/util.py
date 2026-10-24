@@ -30,6 +30,18 @@ def parse_int(value: str | None) -> int | None:
         raise ValueError(f"Nombre invalide : {value}") from None
 
 
+def parse_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    text = value.strip().replace("'", "").replace("’", "").replace(" ", "").replace(",", ".")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        raise ValueError(f"Nombre invalide : {value}") from None
+
+
 def parse_date(value: str | None) -> date | None:
     if value is None or not value.strip():
         return None

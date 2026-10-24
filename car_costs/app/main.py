@@ -18,10 +18,11 @@ from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from . import charts, costs, sync
+from . import charts, costs, features, sync
 from .db import Base, add_missing_columns, make_engine, make_sessionmaker
 from .models import (
     CATEGORY_KINDS,
+    ADDED_CATEGORIES,
     CONTRACT_KINDS,
     DEFAULT_CATEGORIES,
     PERIODS,
@@ -34,7 +35,7 @@ from .models import (
     OdometerReading,
     Vehicle,
 )
-from .util import clean, format_date, format_km, format_money, parse_date, parse_int, parse_money
+from .util import add_months, clean, format_date, format_km, format_money, parse_date, parse_float, parse_int, parse_money
 
 HERE = Path(__file__).parent
 log = logging.getLogger("car_costs")
@@ -62,7 +63,9 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
     with Sessions() as session:
         if not session.scalar(select(func.count(Category.id))):
             session.add_all(Category(name=n, kind=k) for n, k in DEFAULT_CATEGORIES)
-            session.commit()
+        known = set(session.scalars(select(Category.name)))
+        session.add_all(Category(name=n, kind=k) for n, k in ADDED_CATEGORIES if n not in known)
+        session.commit()
 
     background: set[asyncio.Task] = set()
 
@@ -171,6 +174,10 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 period, start, label = "year", date(now.year, 1, 1), "Cette année"
             end = date(start.year, 12, 31) if period.isdigit() and int(period) < now.year else now
             summary = costs.summarize(session, vehicle, start, end)
+            fuel = [
+                r for r in costs.savings(session, vehicle, sync.load_fuel_index(session), now)
+                if r.start <= end and add_months(r.start, 1) > start  # mois qui touchent la période
+            ]
             return render(
                 request,
                 "dashboard.html",
@@ -181,6 +188,8 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 years=years,
                 reminders=costs.reminders(session, vehicle, now),
                 km_now=costs.current_km(session, vehicle),
+                saved_cents=sum(r.saved_cents for r in fuel) if fuel else None,
+                petrol_cents=sum(r.petrol_cents for r in fuel),
                 chart=charts.cost_and_km_chart(costs.monthly(session, vehicle, now)),
             )
 
@@ -229,6 +238,13 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 vehicle.evcc_url = clean(form.get("evcc_url"))
                 if vehicle.evcc_url and not vehicle.evcc_url.startswith(("http://", "https://")):
                     vehicle.evcc_url = "http://" + vehicle.evcc_url
+                vehicle.first_registration_date = parse_date(form.get("first_registration_date"))
+                vehicle.inspection_intervals = clean(form.get("inspection_intervals"))
+                vehicle.fuel_consumption_l100 = parse_float(form.get("fuel_consumption_l100"))
+                vehicle.fuel_price_ref = parse_float(form.get("fuel_price_ref"))
+                vehicle.fuel_price_ref_date = parse_date(form.get("fuel_price_ref_date"))
+                vehicle.soh_entity = clean(form.get("soh_entity"))
+                vehicle.cell_soh_entity = clean(form.get("cell_soh_entity"))
             except ValueError as exc:
                 return render(
                     request, "vehicle.html", vehicle=vehicle, readings=[], today=today(), status={}, form=form, error=str(exc)
@@ -708,6 +724,16 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             session.commit()
         back = form.get("back") or "/documents"
         return redirect(request, back if back.startswith("/") and not back.startswith("//") else "/documents")
+
+    features.register(
+        app,
+        Sessions=Sessions,
+        render=render,
+        redirect=redirect,
+        get_vehicle=get_vehicle,
+        get_or_404=get_or_404,
+        today=today,
+    )
 
     # ---------------------------------------------------------------- catégories
 

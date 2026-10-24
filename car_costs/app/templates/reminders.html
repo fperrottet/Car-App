@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block content %}
+<h1>Rappels administratifs</h1>
+
+{% if alerts %}
+<section>
+  <h2>Prochaines échéances</h2>
+  <ul class="reminders">
+    {% for r in alerts %}<li class="{{ 'overdue' if r.overdue }}"><span>{{ r.when|fdate }}</span> {{ r.text }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section>
+  <h2>Expertise</h2>
+  {% if next_inspection %}
+  <p>Prochaine expertise : <strong>{{ next_inspection|fdate }}</strong>
+    <span class="muted">(rappel 4 mois avant ; intervalles {{ intervals|join(", ") }} ans{% if vehicle.first_registration_date %}, 1re immatriculation le {{ vehicle.first_registration_date|fdate }}{% endif %})</span></p>
+  {% else %}
+  <p class="note">Indique la date de 1re immatriculation (case B de la carte grise) sur la page <a href="{{ base }}/vehicle">Véhicule</a> pour calculer la prochaine expertise.</p>
+  {% endif %}
+  <form method="post" action="{{ base }}/inspections" class="inline">
+    <input type="date" name="date" value="{{ form.get('date', '') }}" required aria-label="Date">
+    <input name="odometer_km" placeholder="km" inputmode="numeric" value="{{ form.get('odometer_km', '') }}">
+    <input name="amount" placeholder="CHF" inputmode="decimal" value="{{ form.get('amount', '') }}">
+    <input name="notes" placeholder="Remarques (défauts, contre-visite...)" value="{{ form.get('notes', '') }}">
+    <button>Ajouter une expertise passée</button>
+  </form>
+  {% if inspections %}
+  <table>
+    <thead><tr><th>Date</th><th class="num">Km</th><th>Remarques</th><th class="num">CHF</th><th></th></tr></thead>
+    <tbody>
+      {% for i in inspections %}
+      <tr>
+        <td>{{ i.date|fdate }}</td><td class="num">{{ i.odometer_km|km }}</td><td>{{ i.notes or "" }}</td><td class="num">{{ spent.get(i.id)|money }}</td>
+        <td><form method="post" action="{{ base }}/inspections/{{ i.id }}/delete"><button class="link danger" onclick="return confirm('Supprimer cette expertise ?')">supprimer</button></form></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Mes rappels</h2>
+  {% if active %}
+  <table>
+    <thead><tr><th>Rappel</th><th>Échéance</th><th>Répétition</th><th></th></tr></thead>
+    <tbody>
+      {% for r in active %}
+      <tr class="{{ 'overdue' if r.due_date and r.due_date < today }}">
+        <td><a href="{{ base }}/reminders/{{ r.id }}">{{ r.title }}</a>{% if r.notes %}<br><small class="muted">{{ r.notes }}</small>{% endif %}</td>
+        <td>{{ r.due_date|fdate }}{% if r.due_date and r.due_km %} ou {% endif %}{% if r.due_km %}{{ r.due_km|km }} km{% endif %}</td>
+        <td>{{ "tous les %d mois"|format(r.repeat_months) if r.repeat_months else "" }}</td>
+        <td><form method="post" action="{{ base }}/reminders/{{ r.id }}/done"><button class="secondary">{{ "Fait, suivant" if r.repeat_months and r.due_date else "Fait" }}</button></form></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Aucun rappel actif.</p>
+  {% endif %}
+
+  <form method="post" action="{{ base }}/reminders/new" class="card">
+    <strong>Nouveau rappel</strong>
+    <div class="presets">
+      <span class="muted">Modèles :</span>
+      {% for key, p in presets.items() %}<a class="button secondary" href="{{ base }}/reminders?preset={{ key }}#new">{{ p.label }}</a>{% endfor %}
+    </div>
+    <div class="grid" id="new">
+      {{ m.field("title", "Titre", required=True) }}
+      {{ m.field("due_date", "Échéance", type="date") }}
+      {{ m.field("due_km", "Ou à (km)", attrs='inputmode="numeric"') }}
+      {{ m.field("repeat_months", "Répéter tous les (mois)", attrs='inputmode="numeric"', hint="Vide : une seule fois") }}
+      {{ m.textarea("notes", "Notes") }}
+    </div>
+    <div class="actions"><button>Ajouter</button></div>
+  </form>
+
+  {% if done %}
+  <details class="card">
+    <summary><strong>Rappels terminés</strong></summary>
+    <table>
+      <tbody>
+        {% for r in done %}
+        <tr class="muted"><td>{{ r.title }}</td><td>fait le {{ r.done_date|fdate }}</td>
+          <td><form method="post" action="{{ base }}/reminders/{{ r.id }}/reopen"><button class="link">réactiver</button></form></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+{% endblock %}
