@@ -28,22 +28,36 @@ Réglages sur la page **Véhicule** : entité de l'odomètre, adresse d'EVCC (pa
 
 ## Carte pour un tableau de bord Home Assistant
 
-L'add-on copie à chaque démarrage la carte `car-costs-card.js` dans le dossier `www` de Home Assistant. Elle affiche la voiture, la charge et l'autonomie, la santé de la batterie (SoH, historique, chaque cellule), les coûts et un diagnostic (12 V, pneus, expertise, rappels).
+L'add-on copie à chaque démarrage la carte `car-costs-card.js` dans le dossier `www` de Home Assistant. Elle affiche la photo de la voiture sur fond « showroom », la charge et l'autonomie, les températures, la clim et le GPS, la courbe de charge sur 24 h, les coûts, la batterie (santé et capacité dans le temps, nombre de recharges, énergie totale, cycles équivalents, part solaire, chaque cellule) et un diagnostic (pneus, expertise, rappels).
 
 1. Si le dossier `www` n'existait pas encore, redémarre Home Assistant une fois (**Paramètres > Système > Redémarrer**) pour qu'il serve `/local/`.
-2. **Paramètres > Tableaux de bord**, menu ⋮ > **Ressources** > **Ajouter une ressource** : URL `/local/car-costs-card.js?v=0.4.0`, type **Module JavaScript**. Le menu Ressources n'apparaît que si le **mode avancé** est activé dans ton profil utilisateur.
+2. **Paramètres > Tableaux de bord**, menu ⋮ > **Ressources** > **Ajouter une ressource** : URL `/local/car-costs-card.js?v=0.5.0`, type **Module JavaScript**. Le menu Ressources n'apparaît que si le **mode avancé** est activé dans ton profil utilisateur.
 3. Dans un tableau de bord : **Ajouter une carte**, cherche « Frais de voiture », ou en YAML :
 
 ```yaml
 type: custom:car-costs-card
+# Photo de la voiture (image téléversée dans HA, ou /local/ma-voiture.png)
+image: /api/image/serve/28f8032dd39487e83a15852b6cfa2f78/original
+image_dark: /api/image/serve/2f4e2ff6cf38ba118bf02a96e98fd163/original
+map_path: /map          # bouton GPS
+hours: 24               # durée de la courbe de charge
 # Facultatif : imposer des entités si la recherche automatique se trompe
 entities:
-  soc: sensor.parking_216980_v_b_soc
-  range: sensor.parking_216980_v_b_range_est
-  charging: sensor.parking_216980_v_c_charging
-  aux12v: sensor.parking_216980_v_b_12v_voltage
-  tire_health: sensor.parking_216980_tire_health
+  soc: sensor.parking_216980_normalized_soc_vw_eup
+  range: sensor.216980_estimated_range
+  charge_state: sensor.216980_charge_state
+  charging_power: sensor.evcc_api_borne_elli_charge_power
+  plug: binary_sensor.evcc_api_borne_elli_connected
+  aux12v: sensor.216980_12v_battery_voltage
+  outside: sensor.216980_ambient_temperature
+  cabin: sensor.216980_cabin_temperature
+  hvac: switch.216980_hvac_active
+  hvac_toggle: switch.ovms_216980_metric_v_e_hvac_switch_2
+# Facultatif : choisir et ordonner les blocs
+sections: [hero, actions, soc_chart, costs, battery, diagnostic]
 ```
+
+La capacité de la batterie vient de la métrique OVMS `xvu.b.cap.kwh.norm` si elle existe (sinon la carte indique la capacité nominale de 32.3 kWh). Le nombre de recharges vient d'EVCC ; l'énergie totale ajoute l'estimation d'avant EVCC, et les cycles sont calculés comme énergie × 0.9 / capacité utile.
 
 Après une mise à jour de l'add-on, change le `?v=` de la ressource (ou vide le cache du navigateur) pour charger la nouvelle carte.
 
