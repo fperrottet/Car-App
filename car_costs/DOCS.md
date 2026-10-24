@@ -9,5 +9,5 @@ Ouvre l'add-on depuis la barre latérale. Au premier lancement, renseigne la fic
 - **Batterie** : les entités OVMS sont cherchées automatiquement ; la page Batterie liste celles trouvées, et tu peux en imposer une sur la page Véhicule.
 - **Rappels** : la prochaine expertise se calcule depuis la 1re immatriculation (case B de la carte grise) ; ajoute ensuite chaque expertise passée.
 - **Capteurs HA** : `sensor.frais_voiture_*` sont mis à jour à chaque synchronisation, utilisables dans les tableaux de bord et automatisations.
-- **Carte Lovelace** : ajoute la ressource `/local/car-costs-card.js?v=0.4.0` (type Module JavaScript) puis la carte « Frais de voiture » (`type: custom:car-costs-card`). Détails dans le README du dépôt.
+- **Carte Lovelace** : ajoute la ressource `/local/car-costs-card.js?v=0.5.0` (type Module JavaScript) puis la carte « Frais de voiture » (`type: custom:car-costs-card`). Détails dans le README du dépôt.
 - **Sauvegarde** : la base et les documents sont dans `/data`, inclus dans les sauvegardes Home Assistant.

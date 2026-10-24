@@ -209,6 +209,9 @@ def sync_fuel_index(session: Session, today: date) -> str:
 CELL_PATTERNS = ("xvu_b_c_soh", "b_c_soh", "cell_soh")
 SOH_PATTERNS = ("xvu_b_soh_charge", "soh_charge", "v_b_soh", "xvu_b_soh_range", "soh")
 MODULE_PATTERN = "hist_soh_mod"
+# Capacité utile estimée par la voiture (kWh), la plus précise en premier.
+CAPACITY_PATTERNS = ("xvu_b_cap_kwh_norm", "cap_kwh_norm", "xvu_b_cap_kwh_abs", "cap_kwh_abs", "usable_capacity", "battery_capacity")
+CAPACITY_RANGE = (5.0, 120.0)
 SOH_RANGE = (40.0, 110.0)
 
 
@@ -253,7 +256,18 @@ def discover_battery(states: dict[str, dict], vehicle: Vehicle) -> dict:
     cells = vehicle.cell_soh_entity or pick(CELL_PATTERNS, exclude=(MODULE_PATTERN,))
     soh = vehicle.soh_entity or pick(SOH_PATTERNS, exclude=(MODULE_PATTERN, "b_c_soh", "cell"))
     modules = sorted(e for e in soh_ids if MODULE_PATTERN in keys[e])
-    return {"soh": soh, "cells": cells, "modules": modules, "candidates": sorted(soh_ids)}
+    capacity = next(
+        (eid for pattern in CAPACITY_PATTERNS for eid in sorted(keys) if pattern in keys[eid] and "hist" not in keys[eid]),
+        None,
+    )
+    return {"soh": soh, "cells": cells, "modules": modules, "capacity": capacity, "candidates": sorted(soh_ids)}
+
+
+def capacity_value(state: dict) -> float | None:
+    values = numbers(state.get("state"))
+    if len(values) == 1 and CAPACITY_RANGE[0] <= values[0] <= CAPACITY_RANGE[1]:
+        return values[0]
+    return None
 
 
 def sync_battery(session: Session, vehicle: Vehicle, ha: tuple[str, str], today: date) -> str:
@@ -264,10 +278,11 @@ def sync_battery(session: Session, vehicle: Vehicle, ha: tuple[str, str], today:
     soh = soh_values[0] if len(soh_values) == 1 else None
     cells = entity_values(states.get(found["cells"]) or {})
     modules = {eid: entity_values(states[eid]) for eid in found["modules"]}
-    seen = [(eid, str(states[eid].get("state"))[:60]) for eid in found["candidates"]]
+    capacity = capacity_value(states.get(found["capacity"]) or {})
+    seen = [(eid, str(states[eid].get("state"))[:60]) for eid in found["candidates"] + ([found["capacity"]] if found["capacity"] else [])]
     set_setting(session, "battery_entities", json.dumps({**found, "seen": seen}))
     set_setting(session, "battery_modules", json.dumps(modules))
-    if soh is None and not cells:
+    if soh is None and not cells and capacity is None:
         return f"aucune valeur de SoH trouvée ({len(seen)} entités contenant « soh »)"
 
     snapshot = session.scalars(
@@ -275,10 +290,13 @@ def sync_battery(session: Session, vehicle: Vehicle, ha: tuple[str, str], today:
     ).first() or BatterySnapshot(vehicle_id=vehicle.id, date=today)
     snapshot.soh = soh
     snapshot.cells = json.dumps(cells) if cells else None
+    snapshot.capacity_kwh = capacity
     session.add(snapshot)
     parts = [f"SoH {soh:g} %" if soh is not None else "SoH global absent"]
     if cells:
         parts.append(f"{len(cells)} cellules (min {min(cells):g} %)")
+    if capacity is not None:
+        parts.append(f"capacité {capacity:g} kWh")
     return ", ".join(parts)
 
 
@@ -329,19 +347,31 @@ def ha_sensors(session: Session, vehicle: Vehicle, today: date) -> dict[str, tup
             min(cells), "%", "Batterie : cellule la plus faible", "mdi:battery-heart-variant",
             {"moyenne": round(sum(cells) / len(cells), 2), "max": max(cells), "cellule": cells.index(min(cells)) + 1},
         )
+    # Pour la carte Lovelace : SoH, cellules, capacité et historiques (au plus 1 point par semaine).
+    history: list = []
+    capacity_history: list = []
+    for snap in reversed(snapshots[:730]):
+        snap_cells = json.loads(snap.cells) if snap.cells else []
+        value = snap.soh if snap.soh is not None else (sum(snap_cells) / len(snap_cells) if snap_cells else None)
+        for series, point in ((history, value), (capacity_history, snap.capacity_kwh)):
+            if point is not None and (not series or (snap.date - date.fromisoformat(series[-1][0])).days >= 7):
+                series.append([snap.date.isoformat(), round(point, 2)])
+    soh = None
     if latest:
-        # Pour la carte Lovelace : SoH, cellules et historique (au plus ~1 point par semaine sur 2 ans).
-        history = []
-        for snap in reversed(snapshots[:730]):
-            snap_cells = json.loads(snap.cells) if snap.cells else []
-            value = snap.soh if snap.soh is not None else (sum(snap_cells) / len(snap_cells) if snap_cells else None)
-            if value is not None and (not history or (snap.date - date.fromisoformat(history[-1][0])).days >= 7):
-                history.append([snap.date.isoformat(), round(value, 2)])
         soh = latest.soh if latest.soh is not None else (round(sum(cells) / len(cells), 2) if cells else None)
-        sensors["batterie"] = (
-            soh, "%", "Batterie : état de santé", "mdi:battery-heart",
-            {"date": latest.date.isoformat(), "cells": cells, "history": history},
-        )
+    capacity = next((s.capacity_kwh for s in snapshots if s.capacity_kwh is not None), None)
+    stats = costs.battery_stats(session, vehicle, today, capacity)
+    sensors["batterie"] = (
+        soh, "%", "Batterie : état de santé", "mdi:battery-heart",
+        {
+            "date": latest.date.isoformat() if latest else None,
+            "cells": cells,
+            "history": history,
+            "capacity_kwh": capacity,
+            "capacity_history": capacity_history,
+            **stats,
+        },
+    )
     tires = [
         {"season": t.season, "label": t.label, "size": t.size, "position": t.position, "count": t.count,
          "km": costs.tire_km(t, costs.odometer_points(session, vehicle), costs.current_km(session, vehicle)),
@@ -371,6 +401,7 @@ def push_sensors(session: Session, vehicle: Vehicle, ha: tuple[str, str], today:
         attributes = {"friendly_name": label, "icon": icon, **extra}
         if unit:
             attributes["unit_of_measurement"] = unit
+        state = "unknown" if state is None else state  # HA refuse un état vide
         post_json(f"{base}/states/{SENSOR_PREFIX}{name}", {"state": state, "attributes": attributes}, token)
     return f"{len(sensors)} capteurs {SENSOR_PREFIX}* mis à jour"
 

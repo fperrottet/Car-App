@@ -332,3 +332,4 @@ class BatterySnapshot(Base):
     date: Mapped[date]
     soh: Mapped[float | None]
     cells: Mapped[str | None] = mapped_column(Text)  # JSON : SoH de chaque cellule
+    capacity_kwh: Mapped[float | None]  # capacité mesurée par la voiture

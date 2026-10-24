@@ -372,3 +372,42 @@ def test_card_is_copied_into_home_assistant_www(tmp_path, monkeypatch):
     monkeypatch.setattr(entry, "HA_CONFIG", tmp_path)
     entry.install_card()
     assert "customElements.define(\"car-costs-card\"" in (tmp_path / "www" / "car-costs-card.js").read_text()
+
+
+def test_battery_stats_count_charges_energy_and_cycles(db):
+    session, vehicle = db
+    vehicle.estimate_charging = False
+    session.add_all([
+        ChargingSession(vehicle_id=vehicle.id, evcc_id=1, started=datetime(2026, 5, 1, 20), energy_kwh=20.0,
+                        cost_cents=300, solar_pct=0),
+        ChargingSession(vehicle_id=vehicle.id, evcc_id=2, started=datetime(2026, 6, 1, 12), energy_kwh=30.0,
+                        cost_cents=200, solar_pct=100),
+        OdometerReading(vehicle_id=vehicle.id, date=date(2026, 4, 1), km=10000),
+        OdometerReading(vehicle_id=vehicle.id, date=TODAY, km=10500),
+    ])
+    session.flush()
+    stats = costs.battery_stats(session, vehicle, TODAY, capacity_kwh=30.0)
+    assert stats["charges"] == 2 and stats["first_charge"] == "2026-05-01"
+    assert stats["total_kwh"] == 50.0 and stats["solar_pct"] == 60.0
+    assert stats["avg_price_kwh"] == 0.1
+    assert stats["cycles"] == 1.5  # 50 kWh × 0.9 / 30 kWh
+    assert stats["km"] == 500 and stats["kwh_per_100km"] == 10.0
+    assert costs.battery_stats(session, vehicle, TODAY)["usable_kwh"] == costs.DEFAULT_USABLE_KWH
+
+
+def test_battery_capacity_is_discovered_and_published(db, monkeypatch, no_network):
+    session, vehicle = db
+    states = {
+        "sensor.ovms_216980_metric_xvu_b_cap_kwh_norm": {"entity_id": "sensor.ovms_216980_metric_xvu_b_cap_kwh_norm",
+                                                         "state": "30.6", "attributes": {}},
+        "sensor.ovms_216980_metric_xvu_b_soh_charge": {"entity_id": "sensor.ovms_216980_metric_xvu_b_soh_charge",
+                                                       "state": "94.0", "attributes": {}},
+    }
+    found = sync.discover_battery(states, vehicle)
+    assert found["capacity"] == "sensor.ovms_216980_metric_xvu_b_cap_kwh_norm"
+    assert sync.capacity_value({"state": "300"}) is None  # hors plage
+    session.add(BatterySnapshot(vehicle_id=vehicle.id, date=date(2026, 10, 20), soh=94.0, capacity_kwh=30.6))
+    session.flush()
+    attrs = sync.ha_sensors(session, vehicle, TODAY)["batterie"][4]
+    assert attrs["capacity_kwh"] == 30.6 and attrs["capacity_history"] == [["2026-10-20", 30.6]]
+    assert attrs["usable_kwh"] == 30.6 and "charges" in attrs

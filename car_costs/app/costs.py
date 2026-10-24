@@ -555,3 +555,45 @@ def monthly(session: Session, vehicle: Vehicle, today: date) -> list[Month]:
         )
         month = add_months(month, 1)
     return months
+
+
+# ---------------------------------------------------------------- statistiques batterie
+
+# Capacité utile d'une Citigo e iV / e-Up (32,3 kWh nets sur 36,8 kWh bruts),
+# utilisée tant que la voiture ne fournit pas sa propre mesure.
+DEFAULT_USABLE_KWH = 32.3
+
+
+def battery_stats(session: Session, vehicle: Vehicle, today: date, capacity_kwh: float | None = None) -> dict:
+    """Recharges depuis l'achat : nombre, énergie, cycles complets équivalents."""
+    sessions = list(
+        session.scalars(
+            select(ChargingSession).where(ChargingSession.vehicle_id == vehicle.id).order_by(ChargingSession.started)
+        )
+    )
+    charged = sum(s.energy_kwh for s in sessions)
+    solar = sum(s.energy_kwh * (s.solar_pct or 0) / 100 for s in sessions)
+    paid = [s for s in sessions if s.cost_cents is not None]
+    estimate = charging_estimate(session, vehicle, today)
+    estimated_kwh = sum(d.kwh for d in estimate.days.values()) if estimate else 0.0
+    total = charged + estimated_kwh
+    usable = capacity_kwh or DEFAULT_USABLE_KWH
+    since = vehicle.purchase_date or (sessions[0].started.date() if sessions else None)
+    km = km_between(odometer_points(session, vehicle), since, today) if since else None
+    return {
+        "charges": len(sessions),
+        "first_charge": sessions[0].started.date().isoformat() if sessions else None,
+        "charged_kwh": round(charged, 1),
+        "solar_pct": round(100 * solar / charged, 1) if charged else None,
+        "avg_price_kwh": round(sum(s.cost_cents for s in paid) / 100 / sum(s.energy_kwh for s in paid), 4)
+        if paid and sum(s.energy_kwh for s in paid)
+        else None,
+        "estimated_kwh": round(estimated_kwh, 1),
+        "total_kwh": round(total, 1),
+        "usable_kwh": usable,
+        # Énergie arrivée dans la batterie (pertes de charge déduites) / capacité utile.
+        "cycles": round(total * CHARGING_EFFICIENCY / usable, 1) if total else 0,
+        "since": since.isoformat() if since else None,
+        "km": km,
+        "kwh_per_100km": round(100 * total / km, 1) if km and total else None,
+    }
