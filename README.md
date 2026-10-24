@@ -15,6 +15,8 @@ Add-on Home Assistant pour suivre tous les frais d'une voiture électrique : dé
   - odomètre depuis Home Assistant (entité réglable, par défaut `sensor.216980_odometer`), un relevé par jour ;
   - sessions de charge depuis l'API d'EVCC (`/api/sessions`), avec le coût calculé par EVCC tel quel.
 - Page Recharges : sessions par mois, kWh, part solaire, coût ; kWh/100 km et CHF/100 km au tableau de bord.
+- Recharges d'avant EVCC estimées jour par jour : km (répartis entre deux relevés) × consommation relevée × 1/0,9 de pertes × prix du kWh à cette date (tarifs saisis sur la page Recharges, sinon prix moyen d'EVCC). Désactivable sur la page Véhicule.
+- Import CSV des relevés du compteur (Date ; Km ; kWh/100 km) et des dépenses (même format que l'export).
 - Graphique : coût par km cumulé et km parcourus par mois.
 - Pneus : jeux de 2 ou 4 pneus (saison, marque, dimension, indice, DOT), montages et démontages, km parcourus par jeu, sculpture mesurée ; rappel du changement été/hiver et des pneus usés.
 - Économies face à une voiture à essence : km du mois × consommation × prix de l'essence (ton prix de référence, suivi mois par mois par l'indice des prix de l'essence de l'OFEN), moins l'électricité payée.

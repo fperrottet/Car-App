@@ -22,6 +22,7 @@
   </nav>
   <main>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    {% if request.query_params.get("msg") %}<p class="note">{{ request.query_params.get("msg") }}</p>{% endif %}
     {% block content %}{% endblock %}
   </main>
 </body>

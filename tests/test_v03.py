@@ -7,8 +7,10 @@ from fastapi.testclient import TestClient
 from app import costs, sync
 from app.db import make_engine, make_sessionmaker
 from app.main import create_app
+from app.costs import summarize
 from app.models import (
     BatterySnapshot,
+    ElectricityTariff,
     Category,
     ChargingSession,
     Expense,
@@ -134,6 +136,7 @@ def test_savings_scale_the_reference_price_with_the_index(db):
     vehicle.fuel_consumption_l100 = 5.0
     vehicle.fuel_price_ref = 1.80
     vehicle.fuel_price_ref_date = date(2026, 5, 10)
+    vehicle.estimate_charging = False
     session.add_all([
         OdometerReading(vehicle_id=vehicle.id, date=date(2026, 4, 30), km=11000),
         OdometerReading(vehicle_id=vehicle.id, date=date(2026, 5, 31), km=12000),
@@ -279,3 +282,67 @@ def test_contract_coverages_and_vehicle_notes(client):
     assert page.count('name="cov_name_') == 6  # 3 lignes + 3 vides
     client.post("/vehicle", data={"name": "Citigo", "notes": "Matricule 123.456.789"})
     assert "Matricule 123.456.789" in client.get("/vehicle").text
+
+
+# ---------------------------------------------------------------- recharges d'avant EVCC
+
+
+def test_charging_before_evcc_is_estimated_from_km_and_consumption(db):
+    session, vehicle = db
+    vehicle.purchase_date, vehicle.purchase_odometer_km = date(2026, 1, 1), 10000
+    session.add_all([
+        # 1'000 km en janvier à 15 kWh/100 km, 2'000 km en février à 12 kWh/100 km
+        OdometerReading(vehicle_id=vehicle.id, date=date(2026, 2, 1), km=11000, source="import", kwh_per_100km=15),
+        OdometerReading(vehicle_id=vehicle.id, date=date(2026, 3, 1), km=13000, source="import", kwh_per_100km=12),
+        ElectricityTariff(vehicle_id=vehicle.id, start_date=date(2025, 1, 1), price_per_kwh=0.18),
+        ChargingSession(vehicle_id=vehicle.id, evcc_id=1, started=datetime(2026, 3, 1, 20), energy_kwh=20, cost_cents=400),
+    ])
+    session.flush()
+    jan = summarize(session, vehicle, date(2026, 1, 1), date(2026, 1, 31))
+    assert jan.estimated_cents == round(1000 * 15 / 100 / 0.9 * 0.18 * 100)  # 300 CHF... soit 30.00
+    assert ("Recharge estimée (avant EVCC)", "variable", jan.estimated_cents) in jan.by_category
+    feb = summarize(session, vehicle, date(2026, 2, 1), date(2026, 2, 28))
+    assert feb.estimated_cents == round(2000 * 12 / 100 / 0.9 * 0.18 * 100)
+    march = summarize(session, vehicle, date(2026, 3, 1), date(2026, 3, 31))
+    assert march.estimated_cents == 0 and march.charging_cents == 400  # EVCC prend le relais
+
+
+def test_estimate_falls_back_to_evcc_price_and_can_be_disabled(db):
+    session, vehicle = db
+    vehicle.purchase_date, vehicle.purchase_odometer_km = date(2026, 1, 1), 10000
+    session.add_all([
+        OdometerReading(vehicle_id=vehicle.id, date=date(2026, 1, 31), km=11000),
+        ChargingSession(vehicle_id=vehicle.id, evcc_id=1, started=datetime(2026, 2, 1, 20), energy_kwh=20,
+                        cost_cents=500, odometer_km=11000),
+    ])
+    session.flush()
+    estimate = costs.charging_estimate(session, vehicle, TODAY)
+    km, kwh, cents = estimate.total(date(2026, 1, 1), date(2026, 1, 31))
+    assert round(km) == 1000 and cents == round(1000 * 15 / 100 / 0.9 * 0.25 * 100)  # 0.25 CHF/kWh d'EVCC
+    vehicle.estimate_charging = False
+    assert costs.charging_estimate(session, vehicle, TODAY) is None
+
+
+def test_readings_and_expenses_csv_import(client):
+    csv_readings = "Date;Km;kWh/100 km\n30.03.2022;16865;14,8\n2022-04-30;19391;12.6\nbad;1;2\n"
+    page = client.post("/vehicle/readings/import", files={"file": ("r.csv", csv_readings.encode("cp1252"))}).text
+    assert "2 relevés importés, 0 mis à jour" in page and "ligne 4" in page
+    page = client.get("/vehicle").text
+    assert "16’865" in page and "14.8" in page
+
+    csv_expenses = ("Date;Montant CHF;Catégorie;Type;Fournisseur;Description;Km\n"
+                    "01.09.2022;484.00;Entretien;variable;Garage;Service 25000 km;26000\n"
+                    "2022-02-21;150;Taxe et vignette;fixe;OCN;Taxe plaque 2022;\n"
+                    "2022-03-01;12;Nouvelle catégorie;variable;;Essai;\n")
+    page = client.post("/expenses/import", files={"file": ("e.csv", csv_expenses.encode())}).text
+    assert "3 dépenses importées" in page and "Nouvelle catégorie" in page
+    page = client.post("/expenses/import", files={"file": ("e.csv", csv_expenses.encode())}).text
+    assert "0 dépenses importées, 3 déjà présentes" in page
+
+
+def test_tariffs_are_managed_on_the_charging_page(client):
+    client.post("/tariffs", data={"start_date": "2022-01-01", "price_per_kwh": "0.115"})
+    page = client.get("/charging").text
+    assert "0.1150 CHF/kWh" in page and "Avant EVCC" in page
+    client.post("/tariffs/1/delete")
+    assert "0.1150 CHF/kWh" not in client.get("/charging").text

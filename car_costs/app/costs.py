@@ -1,5 +1,6 @@
 """Calculs : échéances des contrats, coût total, CHF/km, pneus, économies et rappels."""
 
+import bisect
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -12,6 +13,7 @@ from .models import (
     Category,
     ChargingSession,
     Contract,
+    ElectricityTariff,
     Expense,
     Inspection,
     Maintenance,
@@ -134,7 +136,8 @@ class Summary:
     variable_cents: int = 0
     depreciation_cents: int = 0
     km: int | None = None
-    charging_cents: int = 0
+    charging_cents: int = 0  # recharges à domicile, estimation d'avant EVCC comprise
+    estimated_cents: int = 0
     energy_kwh: float = 0.0
     by_category: list[tuple[str, str, int]] = field(default_factory=list)
 
@@ -159,7 +162,8 @@ class Summary:
         return 100 * self.energy_kwh / self.km if self.km and self.energy_kwh else None
 
 
-def summarize(session: Session, vehicle: Vehicle, start: date, end: date) -> Summary:
+def summarize(session: Session, vehicle: Vehicle, start: date, end: date, estimate=False) -> Summary:
+    """`estimate` : estimation déjà calculée (None si aucune) ; False pour la calculer."""
     summary = Summary(start=start, end=end)
     expenses = session.scalars(
         select(Expense).where(Expense.vehicle_id == vehicle.id, Expense.date >= start, Expense.date <= end)
@@ -189,10 +193,130 @@ def summarize(session: Session, vehicle: Vehicle, start: date, end: date) -> Sum
         totals[(HOME_CHARGING, "variable")] = totals.get((HOME_CHARGING, "variable"), 0) + summary.charging_cents
         summary.total_cents += summary.charging_cents
         summary.variable_cents += summary.charging_cents
+    if estimate is False:
+        estimate = charging_estimate(session, vehicle, end)
+    if estimate is not None:
+        _, kwh, cents = estimate.total(start, end)
+        if cents:
+            summary.estimated_cents = cents
+            summary.energy_kwh += kwh
+            summary.charging_cents += cents
+            totals[(ESTIMATED_CHARGING, "variable")] = cents
+            summary.total_cents += cents
+            summary.variable_cents += cents
     summary.by_category = sorted(((n, k, c) for (n, k), c in totals.items()), key=lambda row: -row[2])
     summary.depreciation_cents = depreciation(vehicle, start, end)
     summary.km = km_between(odometer_points(session, vehicle), start, end)
     return summary
+
+
+# ---------------------------------------------------------------- recharges d'avant EVCC
+
+ESTIMATED_CHARGING = "Recharge estimée (avant EVCC)"
+# Pertes entre la prise et la batterie : la consommation de l'ordinateur de bord
+# ne les compte pas (même hypothèse que dans le tableau de Fred : / 0,9).
+CHARGING_EFFICIENCY = 0.9
+DEFAULT_KWH_PER_100KM = 15.0
+# Au-delà, une consommation relevée ne vaut pas pour toute la période écoulée
+# (ordinateur de bord remis à zéro peu avant le relevé).
+CONSUMPTION_MAX_DAYS = 62
+
+
+@dataclass
+class EstimateDay:
+    km: float
+    kwh_per_100km: float
+    kwh: float  # à la prise, pertes comprises
+    cents: float
+
+
+@dataclass
+class ChargingEstimate:
+    start: date
+    end: date  # exclu : première session EVCC (ou fin de la période demandée)
+    days: dict[date, EstimateDay] = field(default_factory=dict)
+
+    def total(self, start: date, end: date) -> tuple[float, float, int]:
+        """km, kWh et centimes estimés entre start et end (inclus)."""
+        rows = [d for day, d in self.days.items() if start <= day <= end]
+        return sum(d.km for d in rows), sum(d.kwh for d in rows), round(sum(d.cents for d in rows))
+
+
+def daily_km(points: list[tuple[date, int]]) -> list[tuple[date, date, float]]:
+    """Segments (début, fin exclue, km par jour) entre relevés successifs."""
+    best: dict[date, int] = {}
+    for d, km in points:
+        best[d] = max(km, best.get(d, 0))
+    ordered = sorted(best.items())
+    segments = []
+    for (d0, k0), (d1, k1) in zip(ordered, ordered[1:]):
+        if k1 > k0:
+            segments.append((d0, d1, (k1 - k0) / (d1 - d0).days))
+    return segments
+
+
+def charging_estimate(session: Session, vehicle: Vehicle, today: date) -> ChargingEstimate | None:
+    """Coût des recharges à domicile d'avant EVCC, jour par jour : km du jour
+    (interpolés entre relevés) × consommation de la période × prix du kWh."""
+    if vehicle.estimate_charging is False or not vehicle.purchase_date:
+        return None
+    sessions = list(
+        session.scalars(
+            select(ChargingSession).where(ChargingSession.vehicle_id == vehicle.id).order_by(ChargingSession.started)
+        )
+    )
+    end = sessions[0].started.date() if sessions else today + timedelta(days=1)
+    if end <= vehicle.purchase_date:
+        return None
+    tariffs = [
+        (t.start_date, t.price_per_kwh)
+        for t in session.scalars(
+            select(ElectricityTariff).where(ElectricityTariff.vehicle_id == vehicle.id).order_by(ElectricityTariff.start_date)
+        )
+    ]
+    paid = [s for s in sessions if s.cost_cents is not None and s.energy_kwh]
+    evcc_price = sum(s.cost_cents for s in paid) / 100 / sum(s.energy_kwh for s in paid) if paid else None
+    if not tariffs and evcc_price is None:
+        return None
+
+    points = odometer_points(session, vehicle)
+    readings = sorted(
+        (r.date, r.kwh_per_100km)
+        for r in session.scalars(
+            select(OdometerReading).where(
+                OdometerReading.vehicle_id == vehicle.id, OdometerReading.kwh_per_100km.is_not(None)
+            )
+        )
+    )
+    # Repli : moyenne des relevés du même mois de l'année, puis de tous les relevés.
+    by_month: dict[int, list[float]] = {}
+    for d, value in readings:
+        by_month.setdefault(d.month, []).append(value)
+    overall = sum(v for _, v in readings) / len(readings) if readings else DEFAULT_KWH_PER_100KM
+    reading_dates = [d for d, _ in readings]
+
+    def consumption(day: date) -> float:
+        i = bisect.bisect_right(reading_dates, day)  # premier relevé qui couvre ce jour
+        if i < len(readings) and (reading_dates[i] - day).days <= CONSUMPTION_MAX_DAYS:
+            return readings[i][1]
+        values = by_month.get(day.month)
+        return sum(values) / len(values) if values else overall
+
+    def price(day: date) -> float:
+        active = [p for start, p in tariffs if start <= day]
+        if active:
+            return active[-1]
+        return evcc_price if evcc_price is not None else tariffs[0][1]
+
+    estimate = ChargingEstimate(vehicle.purchase_date, end)
+    for d0, d1, per_day in daily_km(points):
+        day = max(d0, vehicle.purchase_date)
+        while day < min(d1, end):
+            cons = consumption(day)
+            kwh = per_day * cons / 100 / CHARGING_EFFICIENCY
+            estimate.days[day] = EstimateDay(per_day, cons, kwh, kwh * price(day) * 100)
+            day += timedelta(days=1)
+    return estimate if estimate.days else None
 
 
 # ---------------------------------------------------------------- expertise
@@ -319,6 +443,9 @@ def savings(session: Session, vehicle: Vehicle, index: dict[str, float], today: 
     )
     for e in expenses:
         electric[month_key(e.date)] = electric.get(month_key(e.date), 0) + e.amount_cents
+    estimate = charging_estimate(session, vehicle, today)
+    for day, row in (estimate.days.items() if estimate else []):
+        electric[month_key(day)] = electric.get(month_key(day), 0) + row.cents
 
     month = date(min(firsts).year, min(firsts).month, 1)
     rows: list[FuelMonth] = []
@@ -327,7 +454,7 @@ def savings(session: Session, vehicle: Vehicle, index: dict[str, float], today: 
         km = km_between(points, month, end)
         price = fuel_price(index, vehicle, month)
         petrol = round((km or 0) * vehicle.fuel_consumption_l100 / 100 * price * 100) if price else 0
-        rows.append(FuelMonth(month, km, price, petrol, electric.get(month_key(month), 0)))
+        rows.append(FuelMonth(month, km, price, petrol, round(electric.get(month_key(month), 0))))
         month = add_months(month, 1)
     return rows
 
@@ -417,9 +544,10 @@ def monthly(session: Session, vehicle: Vehicle, today: date) -> list[Month]:
     origin = month
     months: list[Month] = []
     cumulative = 0
+    estimate = charging_estimate(session, vehicle, today)
     while month <= today:
         end = min(add_months(month, 1) - timedelta(days=1), today)
-        summary = summarize(session, vehicle, month, end)
+        summary = summarize(session, vehicle, month, end, estimate)
         cumulative += summary.total_with_depreciation
         km_total = km_between(points, origin, end)
         months.append(

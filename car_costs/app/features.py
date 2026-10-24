@@ -1,28 +1,44 @@
 """Pages ajoutées en 0.3 : pneus, batterie, rappels administratifs (dont
-l'expertise) et économies par rapport à une voiture à essence."""
+l'expertise), économies par rapport à une voiture à essence, imports CSV
+et tarifs d'électricité d'avant EVCC."""
 
 import json
+import urllib.parse
 from datetime import date
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile
 
 from . import charts, costs, sync
 from .models import (
+    CATEGORY_KINDS,
     TIRE_POSITIONS,
     TIRE_SEASONS,
     BatterySnapshot,
     Category,
+    ElectricityTariff,
     Expense,
     Inspection,
+    OdometerReading,
     Reminder,
     TireMount,
     TireSet,
     Vehicle,
 )
-from .util import add_months, clean, parse_date, parse_float, parse_int, parse_money
+from .util import (
+    add_months,
+    clean,
+    decode_upload,
+    parse_any_date,
+    parse_date,
+    parse_float,
+    parse_int,
+    parse_money,
+    read_csv,
+)
 
 
 def linked_expense(session: Session, vehicle: Vehicle, expense_id: int | None, amount: int | None, category: str, **fields):
@@ -528,3 +544,200 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
                 has_index=bool(index),
                 status=settings,
             )
+
+    # ---------------------------------------------------------------- imports CSV et tarifs
+
+    async def uploaded_rows(form) -> list[list[str]]:
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile) or not upload.filename:
+            raise ValueError("Choisis un fichier CSV")
+        return read_csv(decode_upload(await upload.read()))
+
+    def back_with(request: Request, path: str, message: str):
+        return redirect(request, f"{path}?{urllib.parse.urlencode({'msg': message})}")
+
+    @app.post("/vehicle/readings/import")
+    async def readings_import(request: Request):
+        form = await request.form()
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return redirect(request, "/vehicle")
+            try:
+                message = import_readings(session, vehicle, await uploaded_rows(form))
+            except ValueError as exc:
+                return back_with(request, "/vehicle", str(exc))
+            session.commit()
+        return back_with(request, "/vehicle", message)
+
+    @app.post("/expenses/import")
+    async def expenses_import(request: Request):
+        form = await request.form()
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return redirect(request, "/vehicle")
+            try:
+                message = import_expenses(session, vehicle, await uploaded_rows(form))
+            except ValueError as exc:
+                return back_with(request, "/expenses", str(exc))
+            session.commit()
+        return back_with(request, "/expenses", message)
+
+    @app.post("/tariffs")
+    async def tariff_add(request: Request):
+        form = await request.form()
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return redirect(request, "/vehicle")
+            try:
+                start = parse_date(form.get("start_date"))
+                price = parse_float(form.get("price_per_kwh"))
+                if start is None or price is None or not 0 < price < 5:
+                    raise ValueError("Indique une date et un prix du kWh en CHF (par ex. 0.16)")
+            except ValueError as exc:
+                return back_with(request, "/charging", str(exc))
+            session.add(ElectricityTariff(vehicle_id=vehicle.id, start_date=start, price_per_kwh=price))
+            session.commit()
+        return redirect(request, "/charging")
+
+    @app.post("/tariffs/{item_id}/delete")
+    def tariff_delete(request: Request, item_id: int):
+        with Sessions() as session:
+            session.delete(get_or_404(session, ElectricityTariff, item_id))
+            session.commit()
+        return redirect(request, "/charging")
+
+
+def find_columns(header: list[str], wanted: dict[str, tuple[str, ...]]) -> dict[str, int]:
+    """Colonnes repérées par un mot de leur titre (sans tenir compte de la casse)."""
+    found = {}
+    for i, title in enumerate(header):
+        title = title.strip().lower()
+        for key, words in wanted.items():
+            if key not in found and any(w in title for w in words):
+                found[key] = i
+                break
+    return found
+
+
+def has_header(rows: list[list[str]]) -> bool:
+    try:
+        return parse_any_date(rows[0][0]) is None
+    except ValueError:
+        return True
+
+
+def import_readings(session: Session, vehicle: Vehicle, rows: list[list[str]]) -> str:
+    """Relevés « date ; km ; kWh/100 km » (la consommation est facultative)."""
+    if not rows:
+        raise ValueError("Le fichier est vide")
+    columns = {"date": 0, "km": 1, "kwh": 2}
+    first_line = 1
+    if has_header(rows):
+        found = find_columns(rows[0], {"date": ("date",), "kwh": ("kwh", "conso"), "km": ("km", "kilom", "compteur")})
+        if "date" not in found or "km" not in found:
+            raise ValueError("Colonnes « Date » et « Km » introuvables dans l'en-tête")
+        columns, rows, first_line = found, rows[1:], 2
+    existing = {
+        r.date: r
+        for r in session.scalars(
+            select(OdometerReading).where(OdometerReading.vehicle_id == vehicle.id, OdometerReading.source == "import")
+        )
+    }
+    added = updated = 0
+    errors = []
+    for number, row in enumerate(rows, start=first_line):
+        cell = lambda key: row[columns[key]] if key in columns and columns[key] < len(row) else ""  # noqa: E731
+        try:
+            day = parse_any_date(cell("date"))
+            km = parse_float(cell("km"))
+            kwh = parse_float(cell("kwh"))
+        except ValueError as exc:
+            errors.append(f"ligne {number} : {exc}")
+            continue
+        if day is None or km is None:
+            continue
+        item = existing.get(day)
+        if item:
+            updated += 1
+        else:
+            item = OdometerReading(vehicle_id=vehicle.id, date=day, source="import")
+            existing[day] = item
+            added += 1
+        item.km = round(km)
+        item.kwh_per_100km = kwh
+        session.add(item)
+    message = f"{added} relevés importés, {updated} mis à jour"
+    if errors:
+        message += f" ; ignorés : {', '.join(errors[:5])}"
+    return message
+
+
+def import_expenses(session: Session, vehicle: Vehicle, rows: list[list[str]]) -> str:
+    """Même format que l'export CSV : Date ; Montant CHF ; Catégorie ; Type ; Fournisseur ; Description ; Km."""
+    if not rows or not has_header(rows):
+        raise ValueError("Il faut une ligne d'en-tête (Date ; Montant CHF ; Catégorie ...), comme dans l'export")
+    columns = find_columns(
+        rows[0],
+        {
+            "date": ("date",),
+            "amount": ("montant", "chf", "prix"),
+            "category": ("catég", "categ"),
+            "kind": ("type",),
+            "vendor": ("fournisseur", "garage", "magasin"),
+            "description": ("descr", "libell"),
+            "km": ("km",),
+        },
+    )
+    if "date" not in columns or "amount" not in columns:
+        raise ValueError("Colonnes « Date » et « Montant » introuvables dans l'en-tête")
+    categories = {c.name.lower(): c for c in session.scalars(select(Category))}
+    seen = {
+        (e.date, e.amount_cents, e.description or "")
+        for e in session.scalars(select(Expense).where(Expense.vehicle_id == vehicle.id))
+    }
+    added = duplicates = 0
+    errors = []
+    for number, row in enumerate(rows[1:], start=2):
+        cell = lambda key: row[columns[key]].strip() if key in columns and columns[key] < len(row) else ""  # noqa: E731
+        try:
+            day = parse_any_date(cell("date"))
+            amount = parse_money(cell("amount"))
+            km = parse_float(cell("km"))
+        except ValueError as exc:
+            errors.append(f"ligne {number} : {exc}")
+            continue
+        if day is None or amount is None:
+            continue
+        description = clean(cell("description"))
+        if (day, amount, description or "") in seen:
+            duplicates += 1
+            continue
+        category = None
+        if name := clean(cell("category")):
+            category = categories.get(name.lower())
+            if category is None:
+                kind = cell("kind") if cell("kind") in CATEGORY_KINDS else "variable"
+                category = categories[name.lower()] = Category(name=name, kind=kind)
+                session.add(category)
+        session.add(
+            Expense(
+                vehicle_id=vehicle.id,
+                date=day,
+                amount_cents=amount,
+                category=category,
+                vendor=clean(cell("vendor")),
+                description=description,
+                odometer_km=round(km) if km is not None else None,
+            )
+        )
+        seen.add((day, amount, description or ""))
+        added += 1
+    message = f"{added} dépenses importées"
+    if duplicates:
+        message += f", {duplicates} déjà présentes"
+    if errors:
+        message += f" ; ignorées : {', '.join(errors[:5])}"
+    return message

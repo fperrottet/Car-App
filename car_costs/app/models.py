@@ -63,6 +63,8 @@ class Vehicle(Base):
     cell_soh_entity: Mapped[str | None] = mapped_column(String(200))
     # Tout le reste (n° matricule, prix catalogue, options...) en texte libre.
     notes: Mapped[str | None] = mapped_column(Text)
+    # Estimation des recharges d'avant EVCC (vide : activée).
+    estimate_charging: Mapped[bool | None]
 
 
 class Category(Base):
@@ -179,6 +181,19 @@ class OdometerReading(Base):
     date: Mapped[date]
     km: Mapped[int]
     source: Mapped[str] = mapped_column(String(20), default="manuel")
+    # Consommation moyenne (ordinateur de bord) depuis le relevé précédent.
+    kwh_per_100km: Mapped[float | None]
+
+
+class ElectricityTariff(Base):
+    """Prix du kWh à domicile à partir d'une date, pour estimer les recharges d'avant EVCC."""
+
+    __tablename__ = "electricity_tariff"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"))
+    start_date: Mapped[date]
+    price_per_kwh: Mapped[float]
 
 
 class Document(Base):

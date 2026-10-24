@@ -32,6 +32,7 @@ from .models import (
     Contract,
     ContractCoverage,
     Document,
+    ElectricityTariff,
     Expense,
     Maintenance,
     OdometerReading,
@@ -154,6 +155,17 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
         (column, value), = link.items()
         return list(session.scalars(select(Document).where(getattr(Document, column) == value)))
 
+    # Enregistrées avant les routes /expenses/{id} pour que /expenses/import passe en premier.
+    features.register(
+        app,
+        Sessions=Sessions,
+        render=render,
+        redirect=redirect,
+        get_vehicle=get_vehicle,
+        get_or_404=get_or_404,
+        today=today,
+    )
+
     # ---------------------------------------------------------------- tableau de bord
 
     @app.get("/", response_class=HTMLResponse)
@@ -252,6 +264,8 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 vehicle.soh_entity = clean(form.get("soh_entity"))
                 vehicle.cell_soh_entity = clean(form.get("cell_soh_entity"))
                 vehicle.notes = clean(form.get("notes"))
+                if "estimate_charging" in form:
+                    vehicle.estimate_charging = form.get("estimate_charging") == "1"
             except ValueError as exc:
                 return render(
                     request, "vehicle.html", vehicle=vehicle, readings=[], today=today(), status={}, form=form, error=str(exc)
@@ -329,12 +343,40 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 month["cents"] += item.cost_cents or 0
                 month["solar_kwh"] += item.energy_kwh * (item.solar_pct or 0) / 100
                 month["items"].append(item)
+            estimate = costs.charging_estimate(session, vehicle, today())
+            estimated = []
+            if estimate:
+                by_month: dict[date, list] = {}
+                for day, row in sorted(estimate.days.items()):
+                    by_month.setdefault(day.replace(day=1), []).append(row)
+                for month, rows in sorted(by_month.items(), reverse=True):
+                    km = sum(r.km for r in rows)
+                    estimated.append({
+                        "month": month,
+                        "km": km,
+                        "kwh_per_100km": sum(r.km * r.kwh_per_100km for r in rows) / km if km else None,
+                        "kwh": sum(r.kwh for r in rows),
+                        "cents": round(sum(r.cents for r in rows)),
+                    })
+            tariffs = list(
+                session.scalars(
+                    select(ElectricityTariff)
+                    .where(ElectricityTariff.vehicle_id == vehicle.id)
+                    .order_by(ElectricityTariff.start_date)
+                )
+            )
             return render(
                 request,
                 "charging.html",
                 vehicle=vehicle,
                 months=list(months.values()),
                 status=sync.get_settings(session),
+                estimate=estimate,
+                estimated=estimated,
+                estimate_until=estimate.end - timedelta(days=1) if estimate else None,
+                efficiency=costs.CHARGING_EFFICIENCY,
+                tariffs=tariffs,
+                today=today(),
             )
 
     # ---------------------------------------------------------------- dépenses
@@ -775,16 +817,6 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             session.commit()
         back = form.get("back") or "/documents"
         return redirect(request, back if back.startswith("/") and not back.startswith("//") else "/documents")
-
-    features.register(
-        app,
-        Sessions=Sessions,
-        render=render,
-        redirect=redirect,
-        get_vehicle=get_vehicle,
-        get_or_404=get_or_404,
-        today=today,
-    )
 
     # ---------------------------------------------------------------- catégories
 
