@@ -346,3 +346,29 @@ def test_tariffs_are_managed_on_the_charging_page(client):
     assert "0.1150 CHF/kWh" in page and "Avant EVCC" in page
     client.post("/tariffs/1/delete")
     assert "0.1150 CHF/kWh" not in client.get("/charging").text
+
+
+# ---------------------------------------------------------------- carte Lovelace
+
+
+def test_card_sensors_carry_cells_history_and_vehicle(db, monkeypatch, no_network):
+    session, vehicle = db
+    vehicle.plate = "FR 12345"
+    session.add_all([
+        BatterySnapshot(vehicle_id=vehicle.id, date=date(2026, 9, 1), soh=95.0, cells=json.dumps([95.0, 94.0])),
+        BatterySnapshot(vehicle_id=vehicle.id, date=date(2026, 9, 3), soh=94.9),  # moins d'une semaine : sauté
+        BatterySnapshot(vehicle_id=vehicle.id, date=date(2026, 10, 20), soh=94.5, cells=json.dumps([94.6, 93.2])),
+    ])
+    session.flush()
+    sensors = sync.ha_sensors(session, vehicle, TODAY)
+    soh, unit, _, _, attrs = sensors["batterie"]
+    assert soh == 94.5 and unit == "%" and attrs["cells"] == [94.6, 93.2]
+    assert attrs["history"] == [["2026-09-01", 95.0], ["2026-10-20", 94.5]]
+    assert sensors["vehicule"][4]["plate"] == "FR 12345"
+
+
+def test_card_is_copied_into_home_assistant_www(tmp_path, monkeypatch):
+    from app import __main__ as entry
+    monkeypatch.setattr(entry, "HA_CONFIG", tmp_path)
+    entry.install_card()
+    assert "customElements.define(\"car-costs-card\"" in (tmp_path / "www" / "car-costs-card.js").read_text()
