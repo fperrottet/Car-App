@@ -25,9 +25,16 @@ DEFAULT_CATEGORIES = [
     ("Accessoires", "variable"),
     ("Autre", "variable"),
     ("Expertise", "variable"),
+    ("Carburant", "variable"),
 ]
 # Catégories apparues après la 0.1, ajoutées aux bases existantes si absentes.
-ADDED_CATEGORIES = [("Expertise", "variable")]
+ADDED_CATEGORIES = [("Expertise", "variable"), ("Carburant", "variable")]
+FUEL_CATEGORY = "Carburant"
+
+# Motorisations : celles qui se rechargent et celles qui font le plein.
+ENERGIES = ["électrique", "essence", "diesel", "hybride rechargeable", "hybride"]
+PLUG_IN = {"électrique", "hybride rechargeable"}
+FUELLED = {"essence", "diesel", "hybride rechargeable", "hybride"}
 
 TIRE_SEASONS = ["été", "hiver", "4 saisons"]
 TIRE_POSITIONS = ["les 4", "avant", "arrière"]
@@ -65,6 +72,28 @@ class Vehicle(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     # Estimation des recharges d'avant EVCC (vide : activée).
     estimate_charging: Mapped[bool | None]
+    # Vide : électrique (bases d'avant la 0.6, une seule voiture).
+    energy: Mapped[str | None] = mapped_column(String(30))
+    # Reliée à Home Assistant (odomètre, OVMS, EVCC) ; vide : oui (bases d'avant la 0.6).
+    connected: Mapped[bool | None]
+    # Vendue ou plus utilisée : gardée pour l'historique, masquée du sélecteur.
+    archived: Mapped[bool | None]
+
+    @property
+    def energy_name(self) -> str:
+        return self.energy or "électrique"
+
+    @property
+    def plugs_in(self) -> bool:
+        return self.energy_name in PLUG_IN
+
+    @property
+    def fuelled(self) -> bool:
+        return self.energy_name in FUELLED
+
+    @property
+    def is_connected(self) -> bool:
+        return self.connected is not False
 
 
 class Category(Base):
@@ -166,6 +195,8 @@ class Expense(Base):
     maintenance_id: Mapped[int | None] = mapped_column(ForeignKey("maintenance.id", ondelete="SET NULL"))
     # True pour les échéances créées automatiquement depuis un contrat.
     generated: Mapped[bool] = mapped_column(default=False)
+    # Plein de carburant : litres achetés (le plein est supposé complet).
+    fuel_liters: Mapped[float | None]
 
     category: Mapped[Category | None] = relationship()
     contract: Mapped[Contract | None] = relationship()

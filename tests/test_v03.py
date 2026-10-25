@@ -161,7 +161,7 @@ def test_fuel_index_is_downloaded_once_a_day(db, monkeypatch):
     sync.run_sync(session, NOW, ha=None)
     assert calls == [sync.FUEL_INDEX_URL]
     assert sync.load_fuel_index(session)["2026-05"] == 121.0
-    assert sync.get_settings(session)["sync_fuel"].startswith("OK")
+    assert sync.get_settings(session, vehicle)["sync_fuel"].startswith("OK")
 
 
 # ---------------------------------------------------------------- batterie
@@ -188,7 +188,7 @@ def test_battery_entities_are_discovered_and_stored(db, monkeypatch, no_network)
     sync.run_sync(session, NOW, ha=("http://supervisor/core/api", "token"))
     snap = session.query(BatterySnapshot).one()
     assert snap.soh == 93.4 and json.loads(snap.cells) == [94.1, 93.0, 95.2, 92.4]
-    settings = sync.get_settings(session)
+    settings = sync.get_settings(session, vehicle)
     assert "4 cellules (min 92.4 %)" in settings["sync_battery"]
     assert json.loads(settings["battery_modules"]) == {"sensor.ovms_citigo_xvu_b_hist_soh_mod_01": [99.0, 97.5, 95.1]}
     sync.run_sync(session, NOW, ha=("http://supervisor/core/api", "token"))

@@ -139,6 +139,8 @@ class Summary:
     charging_cents: int = 0  # recharges à domicile, estimation d'avant EVCC comprise
     estimated_cents: int = 0
     energy_kwh: float = 0.0
+    fuel_liters: float = 0.0
+    fuel_cents: int = 0
     by_category: list[tuple[str, str, int]] = field(default_factory=list)
 
     @property
@@ -161,6 +163,10 @@ class Summary:
     def kwh_per_100km(self) -> float | None:
         return 100 * self.energy_kwh / self.km if self.km and self.energy_kwh else None
 
+    @property
+    def liters_per_100km(self) -> float | None:
+        return 100 * self.fuel_liters / self.km if self.km and self.fuel_liters else None
+
 
 def summarize(session: Session, vehicle: Vehicle, start: date, end: date, estimate=False) -> Summary:
     """`estimate` : estimation déjà calculée (None si aucune) ; False pour la calculer."""
@@ -174,6 +180,9 @@ def summarize(session: Session, vehicle: Vehicle, start: date, end: date, estima
         kind = expense.category.kind if expense.category else "variable"
         totals[(name, kind)] = totals.get((name, kind), 0) + expense.amount_cents
         summary.total_cents += expense.amount_cents
+        if expense.fuel_liters:
+            summary.fuel_liters += expense.fuel_liters
+            summary.fuel_cents += expense.amount_cents
         if kind == "fixe":
             summary.fixed_cents += expense.amount_cents
         else:
@@ -258,7 +267,7 @@ def daily_km(points: list[tuple[date, int]]) -> list[tuple[date, date, float]]:
 def charging_estimate(session: Session, vehicle: Vehicle, today: date) -> ChargingEstimate | None:
     """Coût des recharges à domicile d'avant EVCC, jour par jour : km du jour
     (interpolés entre relevés) × consommation de la période × prix du kWh."""
-    if vehicle.estimate_charging is False or not vehicle.purchase_date:
+    if vehicle.estimate_charging is False or not vehicle.purchase_date or not vehicle.plugs_in:
         return None
     sessions = list(
         session.scalars(
@@ -426,7 +435,7 @@ class FuelMonth:
 
 def savings(session: Session, vehicle: Vehicle, index: dict[str, float], today: date) -> list[FuelMonth]:
     """Mois par mois : coût de l'électricité contre celui de l'essence pour les mêmes km."""
-    if not vehicle.fuel_consumption_l100 or not vehicle.fuel_price_ref:
+    if vehicle.energy_name != "électrique" or not vehicle.fuel_consumption_l100 or not vehicle.fuel_price_ref:
         return []
     points = odometer_points(session, vehicle)
     firsts = [d for d in (vehicle.purchase_date, points[0][0] if points else None) if d]
@@ -535,7 +544,7 @@ class Month:
 def monthly(session: Session, vehicle: Vehicle, today: date) -> list[Month]:
     """Une ligne par mois, de l'achat (ou de la première donnée) à aujourd'hui."""
     points = odometer_points(session, vehicle)
-    firsts = [d for d in (vehicle.purchase_date, session.scalar(select(func.min(Expense.date)))) if d]
+    firsts = [d for d in (vehicle.purchase_date, session.scalar(select(func.min(Expense.date)).where(Expense.vehicle_id == vehicle.id))) if d]
     if points:
         firsts.append(points[0][0])
     if not firsts:
@@ -597,3 +606,45 @@ def battery_stats(session: Session, vehicle: Vehicle, today: date, capacity_kwh:
         "km": km,
         "kwh_per_100km": round(100 * total / km, 1) if km and total else None,
     }
+
+
+# ---------------------------------------------------------------- carburant
+
+
+@dataclass
+class FuelFill:
+    expense: Expense
+    km: int | None  # compteur au moment du plein
+    distance: int | None  # depuis le plein précédent
+    liters_per_100km: float | None
+
+    @property
+    def price_per_liter(self) -> float | None:
+        return self.expense.amount_cents / 100 / self.expense.fuel_liters if self.expense.fuel_liters else None
+
+
+def fuel_log(session: Session, vehicle: Vehicle) -> list[FuelFill]:
+    """Pleins du plus récent au plus ancien. Chaque plein est supposé complet :
+    ses litres couvrent les km roulés depuis le plein précédent."""
+    expenses = list(
+        session.scalars(
+            select(Expense)
+            .where(Expense.vehicle_id == vehicle.id, Expense.fuel_liters.is_not(None))
+            .order_by(Expense.date, Expense.id)
+        )
+    )
+    fills: list[FuelFill] = []
+    previous_km: int | None = None
+    for e in expenses:
+        distance = e.odometer_km - previous_km if e.odometer_km and previous_km and e.odometer_km > previous_km else None
+        fills.append(FuelFill(e, e.odometer_km, distance, 100 * e.fuel_liters / distance if distance else None))
+        if e.odometer_km:
+            previous_km = e.odometer_km
+    return fills[::-1]
+
+
+def fuel_average(fills: list[FuelFill]) -> float | None:
+    """Consommation moyenne sur les pleins dont la distance est connue."""
+    measured = [f for f in fills if f.distance]
+    distance = sum(f.distance for f in measured)
+    return 100 * sum(f.expense.fuel_liters for f in measured) / distance if distance else None

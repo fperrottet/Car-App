@@ -1,6 +1,6 @@
 """Pages ajoutées en 0.3 : pneus, batterie, rappels administratifs (dont
 l'expertise), économies par rapport à une voiture à essence, imports CSV
-et tarifs d'électricité d'avant EVCC."""
+et tarifs d'électricité d'avant EVCC ; en 0.6, les pleins de carburant."""
 
 import json
 import urllib.parse
@@ -15,6 +15,7 @@ from starlette.datastructures import UploadFile
 from . import charts, costs, sync
 from .models import (
     CATEGORY_KINDS,
+    FUEL_CATEGORY,
     TIRE_POSITIONS,
     TIRE_SEASONS,
     BatterySnapshot,
@@ -128,7 +129,9 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
 
     def tire_form(request: Request, session: Session, item: TireSet | None, form=None, error=None):
         vehicle = get_vehicle(session)
-        last = session.scalars(select(TireSet).order_by(TireSet.id.desc())).first()
+        last = session.scalars(
+            select(TireSet).where(TireSet.vehicle_id == (vehicle.id if vehicle else None)).order_by(TireSet.id.desc())
+        ).first()
         points = costs.odometer_points(session, vehicle) if vehicle else []
         km_now = costs.current_km(session, vehicle) if vehicle else None
         mounts = []
@@ -313,7 +316,7 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
                     .order_by(BatterySnapshot.date)
                 )
             )
-            settings = sync.get_settings(session)
+            settings = sync.get_settings(session, vehicle)
             history = []
             for s in snapshots:
                 cells = json.loads(s.cells) if s.cells else []
@@ -531,7 +534,7 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
                 return redirect(request, "/vehicle")
             index = sync.load_fuel_index(session)
             rows = costs.savings(session, vehicle, index, today())
-            settings = sync.get_settings(session)
+            settings = sync.get_settings(session, vehicle)
             return render(
                 request,
                 "savings.html",
@@ -601,6 +604,59 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
             session.add(ElectricityTariff(vehicle_id=vehicle.id, start_date=start, price_per_kwh=price))
             session.commit()
         return redirect(request, "/charging")
+
+    # ---------------------------------------------------------------- carburant
+
+    @app.get("/fuel", response_class=HTMLResponse)
+    def fuel_page(request: Request):
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return redirect(request, "/vehicle")
+            fills = costs.fuel_log(session, vehicle)
+            year = date(today().year, 1, 1)
+            this_year = [f for f in fills if f.expense.date >= year]
+            return render(
+                request,
+                "fuel.html",
+                vehicle=vehicle,
+                fills=fills,
+                average=costs.fuel_average(fills),
+                year_liters=sum(f.expense.fuel_liters for f in this_year),
+                year_cents=sum(f.expense.amount_cents for f in this_year),
+                km_now=costs.current_km(session, vehicle),
+                today=today(),
+            )
+
+    @app.post("/fuel")
+    async def fuel_add(request: Request):
+        form = await request.form()
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return redirect(request, "/vehicle")
+            try:
+                liters = parse_float(form.get("liters"))
+                amount = parse_money(form.get("amount"))
+                if not liters or liters <= 0 or amount is None:
+                    raise ValueError("Indique les litres et le montant du plein")
+                category = session.scalars(select(Category).where(Category.name == FUEL_CATEGORY)).first()
+                session.add(
+                    Expense(
+                        vehicle_id=vehicle.id,
+                        date=parse_date(form.get("date")) or today(),
+                        amount_cents=amount,
+                        fuel_liters=liters,
+                        odometer_km=parse_int(form.get("km")),
+                        vendor=clean(form.get("vendor")),
+                        category_id=category.id if category else None,
+                        description="Plein",
+                    )
+                )
+            except ValueError as exc:
+                return back_with(request, "/fuel", str(exc))
+            session.commit()
+        return redirect(request, "/fuel")
 
     @app.post("/tariffs/{item_id}/delete")
     def tariff_delete(request: Request, item_id: int):

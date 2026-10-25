@@ -12,6 +12,9 @@
     {{ m.select("category_id", "Catégorie", categories|options, expense.category_id if expense else none, empty="–") }}
     {{ m.field("vendor", "Fournisseur", expense.vendor if expense else "") }}
     {{ m.field("odometer_km", "Km au compteur", expense.odometer_km if expense else "", attrs='inputmode="numeric"') }}
+    {% if current and current.fuelled or expense and expense.fuel_liters %}
+    {{ m.field("fuel_liters", "Litres (plein)", expense.fuel_liters if expense and expense.fuel_liters else "", attrs='inputmode="decimal"', hint="Pour la consommation en l/100 km") }}
+    {% endif %}
     {{ m.select("contract_id", "Contrat lié", contracts|options("label"), expense.contract_id if expense else none, empty="aucun") }}
     {{ m.textarea("description", "Description", expense.description if expense else "") }}
   </div>

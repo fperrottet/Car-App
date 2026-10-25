@@ -1,12 +1,15 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m with context %}
 {% block content %}
-<h1>{{ "Véhicule" if vehicle else "Bienvenue : décris ta voiture" }}</h1>
-<form method="post" action="{{ base }}/vehicle" class="card">
+<h1>{{ vehicle.name if vehicle else ("Bienvenue : décris ta voiture" if first else "Nouvelle voiture") }}</h1>
+<form method="post" action="{{ base }}/vehicle" class="card" id="vehicle-form">
+  {% if not vehicle %}<input type="hidden" name="id" value="new">{% endif %}
   <div class="grid">
-    {{ m.field("name", "Nom", vehicle.name if vehicle else "Skoda Citigo e iV", required=True) }}
-    {{ m.field("make", "Marque", vehicle.make if vehicle else "Skoda") }}
-    {{ m.field("model", "Modèle", vehicle.model if vehicle else "Citigo e iV") }}
+    {{ m.field("name", "Nom", vehicle.name if vehicle else ("Skoda Citigo e iV" if first else ""), required=True, hint="Affiché dans le sélecteur de voiture") }}
+    {{ m.select("energy", "Motorisation", energies|zip_self, vehicle.energy_name if vehicle else "électrique") }}
+    {{ m.select("connected", "Reliée à Home Assistant", [("1", "oui : odomètre, OVMS, EVCC..."), ("0", "non : tout est saisi à la main")], ("1" if vehicle.is_connected else "0") if vehicle else ("1" if first else "0")) }}
+    {{ m.field("make", "Marque", vehicle.make if vehicle else ("Skoda" if first else "")) }}
+    {{ m.field("model", "Modèle", vehicle.model if vehicle else ("Citigo e iV" if first else "")) }}
     {{ m.field("plate", "Plaque", vehicle.plate if vehicle else "") }}
     {{ m.field("vin", "N° de châssis (VIN)", vehicle.vin if vehicle else "") }}
     {{ m.field("first_registration_date", "1re immatriculation", vehicle.first_registration_date|iso if vehicle else "", type="date", hint="Case B de la carte grise") }}
@@ -29,17 +32,17 @@ Détenteur et conducteur principal · conducteurs de moins de 25 ans · sinistre
     </div>
     <small>La perte de valeur (prix d'achat moins valeur résiduelle) est répartie linéairement sur la durée choisie.</small>
   </fieldset>
-  <fieldset>
+  <fieldset data-when="connected">
     <legend>Liaison Home Assistant et EVCC</legend>
     <div class="grid">
-      {{ m.field("odometer_entity", "Entité odomètre", vehicle.odometer_entity if vehicle else "sensor.216980_odometer") }}
-      {{ m.field("evcc_url", "Adresse d'EVCC", vehicle.evcc_url if vehicle else "", hint="Par exemple http://192.168.1.20:7070, la même que dans ton navigateur") }}
-      {{ m.field("evcc_vehicle", "Véhicule EVCC", vehicle.evcc_vehicle if vehicle else "", hint="Vide : toutes les sessions de la borne") }}
-      {{ m.select("estimate_charging", "Recharges d'avant EVCC", [("1", "estimées d'après les km"), ("0", "ignorées")], "0" if vehicle and vehicle.estimate_charging == false else "1") }}
+      {{ m.field("odometer_entity", "Entité odomètre", vehicle.odometer_entity if vehicle else ("sensor.216980_odometer" if first else ""), hint="Vide : km saisis à la main, aux pleins et aux entretiens") }}
+      <div data-when="plug">{{ m.field("evcc_url", "Adresse d'EVCC", vehicle.evcc_url if vehicle else "", hint="Par exemple http://192.168.1.20:7070, la même que dans ton navigateur") }}</div>
+      <div data-when="plug">{{ m.field("evcc_vehicle", "Véhicule EVCC", vehicle.evcc_vehicle if vehicle else "", hint="Vide : toutes les sessions de la borne. Avec deux voitures électriques, mets son nom dans EVCC") }}</div>
+      <div data-when="plug">{{ m.select("estimate_charging", "Recharges d'avant EVCC", [("1", "estimées d'après les km"), ("0", "ignorées")], "0" if vehicle and vehicle.estimate_charging == false else "1") }}</div>
     </div>
     <small>Import automatique au démarrage, après chaque enregistrement de cette page, puis toutes les heures. Le bouton « Synchroniser maintenant » sert seulement à forcer un import.</small>
   </fieldset>
-  <fieldset>
+  <fieldset data-when="electric">
     <legend>Comparaison avec une voiture à essence</legend>
     <div class="grid">
       {{ m.field("fuel_consumption_l100", "Consommation (l/100 km)", vehicle.fuel_consumption_l100 if vehicle and vehicle.fuel_consumption_l100 else "", attrs='inputmode="decimal" placeholder="5.5"', hint="Citigo essence : environ 5 à 5,5 en réel") }}
@@ -47,25 +50,47 @@ Détenteur et conducteur principal · conducteurs de moins de 25 ans · sinistre
       {{ m.field("fuel_price_ref_date", "Relevé le", vehicle.fuel_price_ref_date|iso if vehicle else "", type="date", hint="Les autres mois suivent l'indice suisse de l'OFEN") }}
     </div>
   </fieldset>
-  <fieldset>
+  <fieldset data-when="connected plug">
     <legend>Santé de la batterie (OVMS)</legend>
     <div class="grid">
       {{ m.field("soh_entity", "Entité SoH global", vehicle.soh_entity if vehicle else "", hint="Vide : recherche automatique") }}
       {{ m.field("cell_soh_entity", "Entité SoH par cellule", vehicle.cell_soh_entity if vehicle else "", hint="Vide : recherche automatique") }}
     </div>
   </fieldset>
-  <button>Enregistrer</button>
+  <button>{{ "Enregistrer" if vehicle or first else "Ajouter la voiture" }}</button>
 </form>
+<script>
+// Masque les réglages qui ne concernent pas cette voiture (ils restent envoyés).
+(() => {
+  const form = document.getElementById("vehicle-form");
+  const plugIn = ["électrique", "hybride rechargeable"];
+  const update = () => {
+    const energy = form.energy.value;
+    const on = { connected: form.connected.value === "1", plug: plugIn.includes(energy), electric: energy === "électrique" };
+    form.querySelectorAll("[data-when]").forEach((el) => {
+      el.hidden = !el.dataset.when.split(" ").every((k) => on[k]);
+    });
+  };
+  form.energy.addEventListener("change", update);
+  form.connected.addEventListener("change", update);
+  update();
+})();
+</script>
 
 {% if vehicle %}
 <section>
   <h2>Synchronisation</h2>
   <ul class="status">
     <li><span>Odomètre (Home Assistant)</span> {{ status.get("sync_odometer") or "pas encore lancée" }}</li>
+    {% if vehicle.plugs_in %}
     <li><span>Sessions de charge (EVCC)</span> {{ status.get("sync_evcc") or "pas encore lancée" }}</li>
-    <li><span>Prix de l'essence (OFEN)</span> {{ status.get("sync_fuel") or "pas encore lancé" }}</li>
     <li><span>Batterie (OVMS)</span> {{ status.get("sync_battery") or "pas encore lancée" }}</li>
+    {% endif %}
+    {% if vehicle.energy_name == "électrique" %}
+    <li><span>Prix de l'essence (OFEN)</span> {{ status.get("sync_fuel") or "pas encore lancé" }}</li>
+    {% endif %}
     <li><span>Capteurs envoyés à HA</span> {{ status.get("sync_ha_sensors") or "pas encore lancé" }}</li>
+    <li><span>Préfixe pour la carte</span> <code>{{ prefix }}</code></li>
   </ul>
   <form method="post" action="{{ base }}/sync"><input type="hidden" name="back" value="/vehicle"><button class="secondary">Synchroniser maintenant</button></form>
 </section>

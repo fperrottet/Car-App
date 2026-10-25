@@ -97,3 +97,11 @@ label.notes { margin-top: 12px; }
 table.coverages th:nth-child(1) { width: 32%; }
 table.coverages th:nth-child(2) { width: 70px; }
 table.coverages th:nth-child(3), table.coverages th:nth-child(4) { width: 120px; }
+nav .switcher select { font-weight: 600; padding: 4px 8px; }
+.vehicles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.vehicles .card { display: flex; flex-direction: column; gap: 6px; }
+.vehicles .card.archived { opacity: .6; }
+.vehicles .active { border-color: var(--accent); }
+.badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+[hidden] { display: none !important; }
+.vehicles .card h2 { margin: 0; }

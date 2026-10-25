@@ -6,11 +6,12 @@ import io
 import json
 import os
 import re
+import unicodedata
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import costs
@@ -280,8 +281,8 @@ def sync_battery(session: Session, vehicle: Vehicle, ha: tuple[str, str], today:
     modules = {eid: entity_values(states[eid]) for eid in found["modules"]}
     capacity = capacity_value(states.get(found["capacity"]) or {})
     seen = [(eid, str(states[eid].get("state"))[:60]) for eid in found["candidates"] + ([found["capacity"]] if found["capacity"] else [])]
-    set_setting(session, "battery_entities", json.dumps({**found, "seen": seen}))
-    set_setting(session, "battery_modules", json.dumps(modules))
+    set_setting(session, "battery_entities", json.dumps({**found, "seen": seen}), vehicle)
+    set_setting(session, "battery_modules", json.dumps(modules), vehicle)
     if soh is None and not cells and capacity is None:
         return f"aucune valeur de SoH trouvée ({len(seen)} entités contenant « soh »)"
 
@@ -335,6 +336,24 @@ def ha_sensors(session: Session, vehicle: Vehicle, today: date) -> dict[str, tup
             first.text[:250], None, "Frais voiture : prochain rappel", "mdi:calendar-alert",
             {"date": first.when.isoformat(), "en_retard": first.overdue, "nombre": len(alerts)},
         )
+    if vehicle.fuelled:
+        fills = costs.fuel_log(session, vehicle)
+        if fills:
+            last = fills[0]
+            average = costs.fuel_average(fills)
+            sensors["carburant"] = (
+                round(average, 2) if average else None, "L/100 km", "Consommation de carburant", "mdi:gas-station",
+                {"last_fill": last.expense.date.isoformat(), "last_liters": last.expense.fuel_liters,
+                 "last_price_per_liter": round(last.price_per_liter, 3) if last.price_per_liter else None,
+                 "fills": len(fills), "year_liters": round(year.fuel_liters, 1), "year_cents": year.fuel_cents},
+            )
+    if vehicle.plugs_in:
+        battery_sensors(session, vehicle, today, sensors)
+    vehicle_sensor(session, vehicle, today, sensors, alerts)
+    return sensors
+
+
+def battery_sensors(session: Session, vehicle: Vehicle, today: date, sensors: dict) -> None:
     snapshots = list(
         session.scalars(
             select(BatterySnapshot).where(BatterySnapshot.vehicle_id == vehicle.id).order_by(BatterySnapshot.date.desc())
@@ -372,6 +391,9 @@ def ha_sensors(session: Session, vehicle: Vehicle, today: date) -> dict[str, tup
             **stats,
         },
     )
+
+
+def vehicle_sensor(session: Session, vehicle: Vehicle, today: date, sensors: dict, alerts) -> None:
     tires = [
         {"season": t.season, "label": t.label, "size": t.size, "position": t.position, "count": t.count,
          "km": costs.tire_km(t, costs.odometer_points(session, vehicle), costs.current_km(session, vehicle)),
@@ -381,9 +403,11 @@ def ha_sensors(session: Session, vehicle: Vehicle, today: date) -> dict[str, tup
     ]
     inspection = costs.next_inspection(session, vehicle)
     sensors["vehicule"] = (
-        costs.current_km(session, vehicle), "km", vehicle.name, "mdi:car-electric",
+        costs.current_km(session, vehicle), "km", vehicle.name, "mdi:car-electric" if vehicle.plugs_in else "mdi:car",
         {
             "plate": vehicle.plate,
+            "energy": vehicle.energy_name,
+            "connected": vehicle.is_connected,
             "model": " ".join(p for p in (vehicle.make, vehicle.model) if p) or None,
             "purchase_date": vehicle.purchase_date.isoformat() if vehicle.purchase_date else None,
             "next_inspection": inspection.isoformat() if inspection else None,
@@ -391,72 +415,118 @@ def ha_sensors(session: Session, vehicle: Vehicle, today: date) -> dict[str, tup
             "alerts": [{"date": a.when.isoformat(), "text": a.text, "overdue": a.overdue} for a in alerts[:6]],
         },
     )
-    return sensors
 
 
 def push_sensors(session: Session, vehicle: Vehicle, ha: tuple[str, str], today: date) -> str:
     base, token = ha
     sensors = ha_sensors(session, vehicle, today)
+    prefix = sensor_prefix(session, vehicle)
     for name, (state, unit, label, icon, extra) in sensors.items():
+        if prefix != SENSOR_PREFIX and not label.startswith(vehicle.name):
+            label = f"{vehicle.name} : {label}"  # distinguer les voitures dans HA
         attributes = {"friendly_name": label, "icon": icon, **extra}
         if unit:
             attributes["unit_of_measurement"] = unit
         state = "unknown" if state is None else state  # HA refuse un état vide
-        post_json(f"{base}/states/{SENSOR_PREFIX}{name}", {"state": state, "attributes": attributes}, token)
-    return f"{len(sensors)} capteurs {SENSOR_PREFIX}* mis à jour"
+        post_json(f"{base}/states/{prefix}{name}", {"state": state, "attributes": attributes}, token)
+    return f"{len(sensors)} capteurs {prefix}* mis à jour"
 
 
-def set_setting(session: Session, key: str, value: str | None) -> None:
+def set_setting(session: Session, key: str, value: str | None, vehicle: Vehicle | None = None) -> None:
+    """`vehicle` : réglage propre à une voiture (état de ses imports)."""
+    key = f"{key}@{vehicle.id}" if vehicle else key
     item = session.get(Setting, key) or Setting(key=key)
     item.value = value
     session.add(item)
 
 
-def get_settings(session: Session) -> dict[str, str | None]:
-    return {s.key: s.value for s in session.scalars(select(Setting))}
+def get_settings(session: Session, vehicle: Vehicle | None = None) -> dict[str, str | None]:
+    """Réglages communs, remplacés par ceux de la voiture donnée."""
+    settings = {}
+    suffix = f"@{vehicle.id}" if vehicle else None
+    for item in session.scalars(select(Setting)):
+        if "@" not in item.key:
+            settings.setdefault(item.key, item.value)
+        elif suffix and item.key.endswith(suffix):
+            settings[item.key.removesuffix(suffix)] = item.value
+    return settings
+
+
+def slug(text: str) -> str:
+    plain = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", plain.lower()).strip("_")
+
+
+def sensor_prefix(session: Session, vehicle: Vehicle) -> str:
+    """La première voiture garde sensor.frais_voiture_*, les autres ajoutent leur nom."""
+    first = session.scalar(select(func.min(Vehicle.id)))
+    if vehicle.id == first:
+        return SENSOR_PREFIX
+    return f"{SENSOR_PREFIX}{slug(vehicle.name) or vehicle.id}_"
 
 
 def run_sync(session: Session, now: datetime | None = None, ha: tuple[str, str] | None = None) -> None:
-    """Lance les imports, publie les capteurs et note le résultat de chacun."""
+    """Lance les imports de chaque voiture, publie les capteurs et note le résultat."""
     now = now or datetime.now()
-    vehicle = session.scalars(select(Vehicle).order_by(Vehicle.id)).first()
-    if vehicle is None:
+    vehicles = list(session.scalars(select(Vehicle).where(Vehicle.archived.is_not(True)).order_by(Vehicle.id)))
+    if not vehicles:
         return
     ha = ha or home_assistant()
     stamp = now.strftime("%d.%m.%Y %H:%M")
 
-    def attempt(key: str, job) -> None:
+    def attempt(key: str, job, vehicle: Vehicle | None) -> None:
         try:
             result = job()
             session.commit()
-            set_setting(session, key, f"OK le {stamp} : {result}")
+            set_setting(session, key, f"OK le {stamp} : {result}", vehicle)
         except Exception as exc:  # réseau, JSON, entité inconnue...
             session.rollback()
-            set_setting(session, key, f"Erreur le {stamp} : {exc}")
+            set_setting(session, key, f"Erreur le {stamp} : {exc}", vehicle)
         session.commit()
 
-    if not vehicle.odometer_entity:
-        set_setting(session, "sync_odometer", "non configuré")
+    # L'indice de l'essence est commun : une fois si une voiture électrique s'y compare.
+    if not any(v.energy_name == "électrique" and v.fuel_consumption_l100 and v.fuel_price_ref for v in vehicles):
+        set_setting(session, "sync_fuel", "non configuré")
+    else:
+        attempt("sync_fuel", lambda: sync_fuel_index(session, now.date()), None)
+
+    for vehicle in vehicles:
+        sync_vehicle(session, vehicle, now, ha, lambda key, job, v=vehicle: attempt(key, job, v))
+    session.commit()
+
+
+def sync_vehicle(session: Session, vehicle: Vehicle, now: datetime, ha, attempt) -> None:
+    def skip(key: str, why: str) -> None:
+        set_setting(session, key, why, vehicle)
+
+    offline = "voiture non connectée"
+    if not vehicle.is_connected:
+        skip("sync_odometer", offline)
+    elif not vehicle.odometer_entity:
+        skip("sync_odometer", "non configuré")
     elif ha is None:
-        set_setting(session, "sync_odometer", "pas d'accès à Home Assistant (hors add-on)")
+        skip("sync_odometer", "pas d'accès à Home Assistant (hors add-on)")
     else:
         attempt("sync_odometer", lambda: f"{sync_odometer(session, vehicle, ha, now)} jours de relevés")
 
-    if not vehicle.evcc_url:
-        set_setting(session, "sync_evcc", "non configuré")
+    if not vehicle.plugs_in:
+        skip("sync_evcc", "pas de recharge")
+    elif not vehicle.is_connected:
+        skip("sync_evcc", offline)
+    elif not vehicle.evcc_url:
+        skip("sync_evcc", "non configuré")
     else:
         attempt("sync_evcc", lambda: sync_evcc(session, vehicle))
 
-    if not (vehicle.fuel_consumption_l100 and vehicle.fuel_price_ref):
-        set_setting(session, "sync_fuel", "non configuré")
-    else:
-        attempt("sync_fuel", lambda: sync_fuel_index(session, now.date()))
-
     if ha is None:
         for key in ("sync_battery", "sync_ha_sensors"):
-            set_setting(session, key, "pas d'accès à Home Assistant (hors add-on)")
+            skip(key, "pas d'accès à Home Assistant (hors add-on)")
+        return
+    if not vehicle.plugs_in:
+        skip("sync_battery", "pas de batterie de traction")
+    elif not vehicle.is_connected:
+        skip("sync_battery", offline)
     else:
         attempt("sync_battery", lambda: sync_battery(session, vehicle, ha, now.date()))
-        # En dernier, pour publier des valeurs à jour.
-        attempt("sync_ha_sensors", lambda: push_sensors(session, vehicle, ha, now.date()))
-    session.commit()
+    # En dernier, pour publier des valeurs à jour (aussi pour une voiture non connectée).
+    attempt("sync_ha_sensors", lambda: push_sensors(session, vehicle, ha, now.date()))
