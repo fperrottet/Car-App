@@ -11,7 +11,7 @@
  * OVMS / EVCC trouvées automatiquement ou indiquées sous `entities:`.
  */
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 // Recherche automatique : [domaines, motifs dans l'identifiant (points remplacés par _), par priorité].
 const DISCOVERY = {
@@ -67,6 +67,7 @@ class CarCostsCard extends HTMLElement {
 
   setConfig(config) {
     this._config = { prefix: "sensor.frais_voiture_", entities: {}, map_path: "/map", hours: 24, ...config };
+    this._mapSet = "map_path" in config;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._signature = null;
     this._ids = null;
@@ -108,8 +109,11 @@ class CarCostsCard extends HTMLElement {
       per_km: prefix + "par_km",
       savings: prefix + "economie_essence",
       reminder: prefix + "prochain_rappel",
+      fuel: prefix + "carburant",
     };
-    const all = Object.keys(this._hass.states).filter((id) => !id.startsWith(prefix));
+    // Voiture non connectée : seulement les entités imposées dans la configuration.
+    const offline = this._hass.states[ids.vehicle]?.attributes?.connected === false;
+    const all = offline ? [] : Object.keys(this._hass.states).filter((id) => !id.startsWith(prefix));
     for (const [key, [domains, patterns]] of Object.entries(DISCOVERY)) {
       ids[key] = this._config.entities[key] || null;
       if (ids[key]) continue;
@@ -147,6 +151,11 @@ class CarCostsCard extends HTMLElement {
     } finally {
       this._loading = false;
     }
+  }
+
+  get _plugsIn() {
+    const energy = this._state("vehicle")?.attributes?.energy;
+    return !["essence", "diesel", "hybride"].includes(energy);
   }
 
   _state(key) {
@@ -219,6 +228,7 @@ class CarCostsCard extends HTMLElement {
     const vehicle = this._state("vehicle");
     const attrs = vehicle?.attributes || {};
     const title = this._config.name || attrs.friendly_name || "Ma voiture";
+    if (!this._plugsIn) return this._fuelHero(attrs, title);
     const soc = num(this._state("soc"));
     const range = num(this._state("range"));
     const odometer = num(vehicle) ?? num(this._state("odometer"));
@@ -260,6 +270,40 @@ class CarCostsCard extends HTMLElement {
     </section>`;
   }
 
+  _fuelHero(attrs, title) {
+    const ids = this._ids;
+    const fuel = this._state("fuel");
+    const f = fuel?.attributes || {};
+    const average = num(fuel);
+    const odometer = num(this._state("vehicle"));
+    const dark = this._hass.themes?.darkMode;
+    const image = (dark && this._config.image_dark) || this._config.image;
+    return `<section class="hero">
+      <div class="hero-top">
+        <div class="identity" data-entity="${esc(ids.vehicle)}">
+          <div class="name">${esc(title)}</div>
+          <div class="sub">${attrs.plate ? `<span class="plate">${esc(attrs.plate)}</span>` : ""}
+            <span>${fmt(odometer)} km</span>${attrs.energy ? `<span>· ${esc(attrs.energy)}</span>` : ""}</div>
+        </div>
+      </div>
+      <div class="stage">
+        ${image ? `<img class="photo" src="${esc(image)}" alt="">` : this._carSvg()}
+        <div class="ring" data-entity="${esc(ids.fuel)}">
+          <svg viewBox="0 0 128 128"><circle cx="64" cy="64" r="52" class="track"/></svg>
+          <div class="ring-text"><span class="soc">${average === null ? "–" : fmt(average, 1)}</span>
+            <span class="ring-label">l/100 km</span></div>
+        </div>
+      </div>
+      <div class="hero-bottom">
+        <div class="range" data-entity="${esc(ids.fuel)}"><span class="big">${f.year_liters ? fmt(f.year_liters) : "–"}</span> l
+          <small>de carburant cette année</small></div>
+        <div class="status" data-entity="${esc(ids.fuel)}"><span class="dot"></span>${
+          f.last_fill ? `Dernier plein ${fdate(f.last_fill)}${f.last_price_per_liter ? ` · ${fmt(f.last_price_per_liter, 2)} CHF/l` : ""}` : "Aucun plein noté"
+        }</div>
+      </div>
+    </section>`;
+  }
+
   _socRing(soc, charging) {
     const r = 52;
     const c = 2 * Math.PI * r;
@@ -286,7 +330,8 @@ class CarCostsCard extends HTMLElement {
       buttons.push(`<button class="action ${on ? "on" : ""}" data-action="hvac" title="Climatisation">
         <ha-icon icon="mdi:air-conditioner"></ha-icon><span>Climatisation</span><small>${on ? "en marche" : "arrêtée"}</small></button>`);
     }
-    if (this._config.map_path) {
+    const offline = this._state("vehicle")?.attributes?.connected === false;
+    if (this._config.map_path && (this._mapSet || !offline)) {
       buttons.push(`<button class="action" data-action="map" title="Carte">
         <ha-icon icon="mdi:map-marker-radius"></ha-icon><span>GPS voiture</span><small>voir la carte</small></button>`);
     }
@@ -337,7 +382,9 @@ class CarCostsCard extends HTMLElement {
     return `<section><div class="section-title">Coûts</div><div class="stats">
       ${tile("Ce mois", fmt(num(s("month"))), "CHF", "month")}
       ${tile("Par km", fmt(num(s("per_km")), 2), "CHF", "per_km")}
-      ${tile("Économie", fmt(num(s("savings"))), "CHF vs essence", "savings", "good")}
+      ${this._plugsIn
+        ? tile("Économie", fmt(num(s("savings"))), "CHF vs essence", "savings", "good")
+        : tile("Carburant", fmt((s("fuel")?.attributes?.year_cents || 0) / 100), "CHF cette année", "fuel")}
       ${tile("Cette année", fmt(num(s("year"))), "CHF", "year")}
     </div></section>`;
   }

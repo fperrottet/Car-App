@@ -37,6 +37,13 @@
     <small>{{ "%.0f"|format(summary.energy_kwh) }} kWh{% if summary.kwh_per_100km %} · {{ "%.1f"|format(summary.kwh_per_100km) }} kWh/100 km{% endif %}{% if summary.km %} · {{ "%.2f"|format(summary.charging_cents / summary.km) }} CHF/100 km{% endif %}{% if summary.estimated_cents %}<br>dont {{ summary.estimated_cents|money }} estimés avant EVCC{% endif %}</small>
   </div>
   {% endif %}
+  {% if summary.fuel_liters %}
+  <a class="tile" href="{{ base }}/fuel">
+    <span>Carburant</span>
+    <strong>{{ summary.fuel_cents|money }} CHF</strong>
+    <small>{{ "%.0f"|format(summary.fuel_liters) }} l{% if summary.liters_per_100km %} · {{ "%.1f"|format(summary.liters_per_100km) }} l/100 km{% endif %}{% if summary.km %} · {{ "%.2f"|format(summary.fuel_cents / summary.km) }} CHF/100 km{% endif %}</small>
+  </a>
+  {% endif %}
   {% if saved_cents is not none %}
   <a class="tile" href="{{ base }}/savings">
     <span>Économie face à l'essence</span>

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Carburant</h1>
+<section class="tiles">
+  <div class="tile">
+    <span>Consommation moyenne</span>
+    <strong>{% if average %}{{ "%.2f"|format(average) }} l/100 km{% else %}–{% endif %}</strong>
+    <small>{% if average %}sur les pleins dont le compteur est connu{% else %}note les km au compteur à chaque plein{% endif %}</small>
+  </div>
+  <div class="tile">
+    <span>Cette année</span>
+    <strong>{{ year_cents|money }} CHF</strong>
+    <small>{{ "%.0f"|format(year_liters) }} l{% if year_liters %} · {{ "%.3f"|format(year_cents / 100 / year_liters) }} CHF/l en moyenne{% endif %}</small>
+  </div>
+  <div class="tile">
+    <span>Pleins notés</span>
+    <strong>{{ fills|length }}</strong>
+    <small>{% if fills %}dernier le {{ fills[0].expense.date|fdate }}{% else %}aucun pour l'instant{% endif %}</small>
+  </div>
+</section>
+
+<section>
+  <h2>Ajouter un plein</h2>
+  <form method="post" action="{{ base }}/fuel" class="inline">
+    <input type="date" name="date" value="{{ today|iso }}" aria-label="Date">
+    <input name="km" placeholder="km au compteur{% if km_now %} ({{ km_now|km }}){% endif %}" inputmode="numeric" aria-label="Km au compteur">
+    <input name="liters" placeholder="litres" inputmode="decimal" required aria-label="Litres">
+    <input name="amount" placeholder="CHF" inputmode="decimal" required aria-label="Montant">
+    <input name="vendor" placeholder="station" aria-label="Station">
+    <button>Ajouter</button>
+  </form>
+  <p class="muted">Chaque plein est compté comme une dépense « Carburant ». Fais le plein complet à chaque fois : les litres d'un plein couvrent les km roulés depuis le précédent.</p>
+</section>
+
+{% if fills %}
+<table>
+  <thead><tr><th>Date</th><th>Station</th><th class="num">Km</th><th class="num">Litres</th><th class="num">CHF</th><th class="num">CHF/l</th><th class="num">Distance</th><th class="num">l/100 km</th></tr></thead>
+  <tbody>
+    {% for f in fills %}
+    <tr>
+      <td><a href="{{ base }}/expenses/{{ f.expense.id }}">{{ f.expense.date|fdate }}</a></td>
+      <td>{{ f.expense.vendor or "" }}</td>
+      <td class="num">{{ f.km|km if f.km else "" }}</td>
+      <td class="num">{{ "%.2f"|format(f.expense.fuel_liters) }}</td>
+      <td class="num">{{ f.expense.amount_cents|money }}</td>
+      <td class="num">{{ "%.3f"|format(f.price_per_liter) if f.price_per_liter else "" }}</td>
+      <td class="num">{{ f.distance|km if f.distance else "" }}</td>
+      <td class="num">{{ "%.2f"|format(f.liters_per_100km) if f.liters_per_100km else "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

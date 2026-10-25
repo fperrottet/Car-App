@@ -1,5 +1,5 @@
 name: Frais de voiture
-version: "0.5.0"
+version: "0.6.0"
 slug: car_costs
 description: Dépenses, contrats, entretien, pneus, batterie et rappels de la voiture, avec le coût par km
 url: https://github.com/fperrottet/car-app

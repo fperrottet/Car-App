@@ -56,7 +56,7 @@ def test_evcc_sessions_are_imported_with_evcc_cost(db, monkeypatch):
     assert [r.evcc_id for r in rows] == [1, 2]  # la session à 0 kWh est ignorée
     assert rows[1].cost_cents == 410 and rows[1].odometer_km == 14010 and rows[1].solar_pct == 25.0
     assert rows[0].finished is None  # session en cours
-    assert sync.get_settings(session)["sync_evcc"].startswith("OK")
+    assert sync.get_settings(session, vehicle)["sync_evcc"].startswith("OK")
 
     # Réimporter met à jour sans doublon ; le filtre véhicule ne garde que la Citigo.
     vehicle.evcc_vehicle = "citigo"
@@ -85,10 +85,10 @@ def test_odometer_history_keeps_one_reading_per_day(db, monkeypatch):
 
 
 def test_failures_are_reported_not_raised(db, monkeypatch):
-    session, _ = db
+    session, vehicle = db
     monkeypatch.setattr(sync, "fetch_json", fake_fetch({}))
     sync.run_sync(session, NOW, ha=("http://supervisor/core/api", "token"))
-    status = sync.get_settings(session)
+    status = sync.get_settings(session, vehicle)
     assert status["sync_odometer"].startswith("Erreur") and status["sync_evcc"].startswith("Erreur")
 
 
@@ -135,12 +135,12 @@ def test_vehicle_filter_matches_title_and_reports_ignored(db, monkeypatch):
     monkeypatch.setattr(sync, "fetch_json", fake_fetch({"/api/sessions": sessions}))
     sync.run_sync(session, NOW, ha=None)
     assert sorted(r.evcc_id for r in session.query(ChargingSession)) == [10, 11]
-    status = sync.get_settings(session)["sync_evcc"]
+    status = sync.get_settings(session, vehicle)["sync_evcc"]
     assert "2 sessions importées sur 3 reçues" in status and "Tesla invité" in status
 
 
 def test_unexpected_evcc_answer_is_an_error(db, monkeypatch):
-    session, _ = db
+    session, vehicle = db
     monkeypatch.setattr(sync, "fetch_json", fake_fetch({"/api/sessions": {"error": "database offline"}}))
     sync.run_sync(session, NOW, ha=None)
-    assert "database offline" in sync.get_settings(session)["sync_evcc"]
+    assert "database offline" in sync.get_settings(session, vehicle)["sync_evcc"]

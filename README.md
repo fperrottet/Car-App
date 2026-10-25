@@ -4,7 +4,9 @@ Add-on Home Assistant pour suivre tous les frais d'une voiture électrique : dé
 
 ## Fonctionnalités
 
+- Plusieurs voitures (page **Voitures**) : électriques, essence, diesel ou hybrides, reliées à Home Assistant ou saisies à la main ; un sélecteur en haut de page, et chaque voiture garde ses propres données. Une voiture vendue s'archive.
 - Fiche véhicule avec prix d'achat et dépréciation linéaire.
+- Pleins de carburant (litres, montant, km) : consommation en l/100 km entre deux pleins, CHF/l, coût par an.
 - Dépenses avec catégories (fixes ou variables), km au compteur et pièce jointe.
 - Contrats (assurance, garantie, taxe...) : préavis, franchise, couverture ; un montant périodique crée automatiquement les échéances dans les dépenses.
 - Carnet d'entretien avec facture et prochain service (date ou km).
@@ -31,7 +33,7 @@ Réglages sur la page **Véhicule** : entité de l'odomètre, adresse d'EVCC (pa
 L'add-on copie à chaque démarrage la carte `car-costs-card.js` dans le dossier `www` de Home Assistant. Elle affiche la photo de la voiture sur fond « showroom », la charge et l'autonomie, les températures, la clim et le GPS, la courbe de charge sur 24 h, les coûts, la batterie (santé et capacité dans le temps, nombre de recharges, énergie totale, cycles équivalents, part solaire, chaque cellule) et un diagnostic (pneus, expertise, rappels).
 
 1. Si le dossier `www` n'existait pas encore, redémarre Home Assistant une fois (**Paramètres > Système > Redémarrer**) pour qu'il serve `/local/`.
-2. **Paramètres > Tableaux de bord**, menu ⋮ > **Ressources** > **Ajouter une ressource** : URL `/local/car-costs-card.js?v=0.5.0`, type **Module JavaScript**. Le menu Ressources n'apparaît que si le **mode avancé** est activé dans ton profil utilisateur.
+2. **Paramètres > Tableaux de bord**, menu ⋮ > **Ressources** > **Ajouter une ressource** : URL `/local/car-costs-card.js?v=0.6.0`, type **Module JavaScript**. Le menu Ressources n'apparaît que si le **mode avancé** est activé dans ton profil utilisateur.
 3. Dans un tableau de bord : **Ajouter une carte**, cherche « Frais de voiture », ou en YAML :
 
 ```yaml
@@ -58,6 +60,14 @@ sections: [hero, actions, soc_chart, costs, battery, diagnostic]
 ```
 
 La capacité de la batterie vient de la métrique OVMS `xvu.b.cap.kwh.norm` si elle existe (sinon la carte indique la capacité nominale de 32.3 kWh). Le nombre de recharges vient d'EVCC ; l'énergie totale ajoute l'estimation d'avant EVCC, et les cycles sont calculés comme énergie × 0.9 / capacité utile.
+
+Pour une autre voiture, ajoute une deuxième carte avec son préfixe (affiché sur sa page Véhicule). Une voiture non connectée n'utilise pas la recherche automatique des entités, et une voiture thermique affiche sa consommation et ses pleins à la place de la batterie :
+
+```yaml
+type: custom:car-costs-card
+prefix: sensor.frais_voiture_vw_golf_
+image: /local/golf.png
+```
 
 Après une mise à jour de l'add-on, change le `?v=` de la ressource (ou vide le cache du navigateur) pour charger la nouvelle carte.
 

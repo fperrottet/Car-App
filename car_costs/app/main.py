@@ -6,6 +6,7 @@ import io
 import logging
 from contextlib import asynccontextmanager
 import os
+import urllib.parse
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -25,6 +26,8 @@ from .models import (
     ADDED_CATEGORIES,
     CONTRACT_KINDS,
     COVERAGE_NAMES,
+    ENERGIES,
+    FUEL_CATEGORY,
     DEFAULT_CATEGORIES,
     PERIODS,
     Category,
@@ -36,6 +39,7 @@ from .models import (
     Expense,
     Maintenance,
     OdometerReading,
+    Setting,
     Vehicle,
 )
 from .util import add_months, clean, format_date, format_km, format_money, parse_date, parse_float, parse_int, parse_money
@@ -43,6 +47,7 @@ from .util import add_months, clean, format_date, format_km, format_money, parse
 HERE = Path(__file__).parent
 log = logging.getLogger("car_costs")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+ACTIVE_VEHICLE = "active_vehicle"
 
 templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.filters["money"] = format_money
@@ -108,13 +113,23 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
     def render(request: Request, name: str, **context) -> HTMLResponse:
         context.setdefault("form", {})
         context.setdefault("error", None)
+        with Sessions() as session:
+            # Pour le sélecteur de voiture et le menu (recharges ou carburant).
+            context.setdefault("current", get_vehicle(session))
+            context.setdefault("vehicles", list(session.scalars(select(Vehicle).order_by(Vehicle.archived.is_(True), Vehicle.id))))
         return templates.TemplateResponse(request, name, {"base": request.state.base, **context})
 
     def redirect(request: Request, path: str) -> RedirectResponse:
         return RedirectResponse(f"{request.state.base}{path}", status_code=303)
 
     def get_vehicle(session: Session) -> Vehicle | None:
-        return session.scalars(select(Vehicle).order_by(Vehicle.id)).first()
+        """La voiture choisie dans le sélecteur, sinon la première en service."""
+        active = session.get(Setting, ACTIVE_VEHICLE)
+        vehicle = session.get(Vehicle, int(active.value)) if active and active.value and active.value.isdigit() else None
+        return vehicle or session.scalars(select(Vehicle).order_by(Vehicle.archived.is_(True), Vehicle.id)).first()
+
+    def set_active(session: Session, vehicle: Vehicle) -> None:
+        sync.set_setting(session, ACTIVE_VEHICLE, str(vehicle.id))
 
     def categories(session: Session) -> list[Category]:
         return list(session.scalars(select(Category).order_by(Category.kind, Category.name)))
@@ -177,13 +192,19 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             now = today()
             costs.sync_all_contracts(session, now)
             years = sorted(
-                {int(y) for y in session.scalars(select(extract("year", Expense.date)).distinct())} | {now.year},
+                {
+                    int(y)
+                    for y in session.scalars(
+                        select(extract("year", Expense.date)).where(Expense.vehicle_id == vehicle.id).distinct()
+                    )
+                }
+                | {now.year},
                 reverse=True,
             )
             if period == "12m":
                 start, label = now - timedelta(days=365), "12 derniers mois"
             elif period == "all":
-                first = session.scalar(select(func.min(Expense.date)))
+                first = session.scalar(select(func.min(Expense.date)).where(Expense.vehicle_id == vehicle.id))
                 start = min(d for d in (vehicle.purchase_date, first, now) if d)
                 label = "Depuis l'achat"
             elif period.isdigit():
@@ -213,39 +234,96 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
 
     # ---------------------------------------------------------------- véhicule
 
+    def vehicle_form(request: Request, session: Session, vehicle: Vehicle | None, form=None, error=None):
+        readings = []
+        if vehicle and vehicle.id:
+            readings = list(
+                session.scalars(
+                    select(OdometerReading)
+                    .where(OdometerReading.vehicle_id == vehicle.id)
+                    .order_by(OdometerReading.date.desc())
+                )
+            )
+        first = not session.scalar(select(func.count(Vehicle.id)))
+        return render(
+            request,
+            "vehicle.html",
+            vehicle=vehicle if vehicle and vehicle.id else None,
+            first=first,
+            energies=ENERGIES,
+            readings=readings,
+            today=today(),
+            status=sync.get_settings(session, vehicle) if vehicle and vehicle.id else {},
+            prefix=sync.sensor_prefix(session, vehicle) if vehicle and vehicle.id else None,
+            form=form or {},
+            error=error,
+        )
+
     @app.get("/vehicle", response_class=HTMLResponse)
     def vehicle_page(request: Request):
         with Sessions() as session:
-            vehicle = get_vehicle(session)
-            readings = []
-            if vehicle:
-                readings = list(
-                    session.scalars(
-                        select(OdometerReading)
-                        .where(OdometerReading.vehicle_id == vehicle.id)
-                        .order_by(OdometerReading.date.desc())
-                    )
-                )
-            return render(
-                request,
-                "vehicle.html",
-                vehicle=vehicle,
-                readings=readings,
-                today=today(),
-                status=sync.get_settings(session),
-            )
+            return vehicle_form(request, session, get_vehicle(session))
+
+    @app.get("/vehicles/new", response_class=HTMLResponse)
+    def vehicle_new(request: Request):
+        with Sessions() as session:
+            return vehicle_form(request, session, None)
+
+    @app.get("/vehicles", response_class=HTMLResponse)
+    def vehicle_list(request: Request):
+        with Sessions() as session:
+            now = today()
+            rows = []
+            for v in session.scalars(select(Vehicle).order_by(Vehicle.archived.is_(True), Vehicle.id)):
+                year = costs.summarize(session, v, date(now.year, 1, 1), now)
+                rows.append({"vehicle": v, "km": costs.current_km(session, v), "year": year})
+            return render(request, "vehicles.html", rows=rows, year=now.year)
+
+    @app.post("/vehicles/select")
+    async def vehicle_select(request: Request):
+        form = await request.form()
+        with Sessions() as session:
+            set_active(session, get_or_404(session, Vehicle, parse_int(form.get("vehicle")) or 0))
+            session.commit()
+        back = form.get("back") or "/"
+        return redirect(request, back if back.startswith("/") and not back.startswith("//") else "/")
+
+    @app.post("/vehicles/{vehicle_id}/archive")
+    def vehicle_archive(request: Request, vehicle_id: int):
+        with Sessions() as session:
+            vehicle = get_or_404(session, Vehicle, vehicle_id)
+            vehicle.archived = not vehicle.archived
+            session.commit()
+        return redirect(request, "/vehicles")
+
+    @app.post("/vehicles/{vehicle_id}/delete")
+    async def vehicle_delete(request: Request, vehicle_id: int):
+        form = await request.form()
+        with Sessions() as session:
+            vehicle = get_or_404(session, Vehicle, vehicle_id)
+            if clean(form.get("confirm")) != vehicle.name:
+                message = urllib.parse.urlencode({"msg": "Suppression annulée : tape le nom exact de la voiture"})
+                return redirect(request, f"/vehicles?{message}")
+            for doc in session.scalars(select(Document).where(Document.vehicle_id == vehicle.id)):
+                (docs_dir / doc.stored_name).unlink(missing_ok=True)
+            session.delete(vehicle)  # le reste suit (ON DELETE CASCADE)
+            session.commit()
+        return redirect(request, "/vehicles")
 
     @app.post("/vehicle")
     async def vehicle_save(request: Request):
         form = dict(await request.form())
         with Sessions() as session:
-            vehicle = get_vehicle(session) or Vehicle()
+            vehicle = Vehicle() if form.get("id") == "new" else (get_vehicle(session) or Vehicle())
             try:
                 vehicle.name = clean(form.get("name")) or "Ma voiture"
                 vehicle.make = clean(form.get("make"))
                 vehicle.model = clean(form.get("model"))
                 vehicle.plate = clean(form.get("plate"))
                 vehicle.vin = clean(form.get("vin"))
+                vehicle.energy = form.get("energy") if form.get("energy") in ENERGIES else vehicle.energy
+                if "connected" in form:
+                    vehicle.connected = form.get("connected") == "1"
                 vehicle.purchase_date = parse_date(form.get("purchase_date"))
                 vehicle.purchase_price_cents = parse_money(form.get("purchase_price"))
                 vehicle.purchase_odometer_km = parse_int(form.get("purchase_odometer_km"))
@@ -267,10 +345,11 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 if "estimate_charging" in form:
                     vehicle.estimate_charging = form.get("estimate_charging") == "1"
             except ValueError as exc:
-                return render(
-                    request, "vehicle.html", vehicle=vehicle, readings=[], today=today(), status={}, form=form, error=str(exc)
-                )
+                session.rollback()
+                return vehicle_form(request, session, vehicle if vehicle.id else None, form, str(exc))
             session.add(vehicle)
+            session.flush()
+            set_active(session, vehicle)
             session.commit()
         if sync_interval:
             # Réglages modifiés : on synchronise tout de suite, sans attendre l'heure suivante.
@@ -370,7 +449,7 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 "charging.html",
                 vehicle=vehicle,
                 months=list(months.values()),
-                status=sync.get_settings(session),
+                status=sync.get_settings(session, vehicle),
                 estimate=estimate,
                 estimated=estimated,
                 estimate_until=estimate.end - timedelta(days=1) if estimate else None,
@@ -394,7 +473,15 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
             if category.isdigit():
                 query = query.where(Expense.category_id == int(category))
             expenses = list(session.scalars(query.order_by(Expense.date.desc(), Expense.id.desc())))
-            years = sorted({int(y) for y in session.scalars(select(extract("year", Expense.date)).distinct())}, reverse=True)
+            years = sorted(
+                {
+                    int(y)
+                    for y in session.scalars(
+                        select(extract("year", Expense.date)).where(Expense.vehicle_id == vehicle.id).distinct()
+                    )
+                },
+                reverse=True,
+            )
             doc_counts = dict(
                 session.execute(
                     select(Document.expense_id, func.count(Document.id))
@@ -417,10 +504,14 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
     @app.get("/expenses.csv")
     def expense_csv(request: Request):
         with Sessions() as session:
+            vehicle = get_vehicle(session)
             buffer = io.StringIO()
             writer = csv.writer(buffer, delimiter=";")
-            writer.writerow(["Date", "Montant CHF", "Catégorie", "Type", "Fournisseur", "Description", "Km", "Contrat", "Auto"])
-            for e in session.scalars(select(Expense).order_by(Expense.date)):
+            writer.writerow(
+                ["Date", "Montant CHF", "Catégorie", "Type", "Fournisseur", "Description", "Km", "Contrat", "Auto", "Litres"]
+            )
+            query = select(Expense).where(Expense.vehicle_id == (vehicle.id if vehicle else None)).order_by(Expense.date)
+            for e in session.scalars(query):
                 writer.writerow(
                     [
                         e.date.isoformat(),
@@ -432,6 +523,7 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                         e.odometer_km or "",
                         f"{e.contract.kind} {e.contract.provider}" if e.contract else "",
                         "oui" if e.generated else "",
+                        f"{e.fuel_liters:g}" if e.fuel_liters else "",
                     ]
                 )
         return Response(
@@ -441,12 +533,19 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
         )
 
     def expense_form(request: Request, session: Session, expense: Expense | None, form=None, error=None):
+        vehicle = get_vehicle(session)
         return render(
             request,
             "expense_form.html",
             expense=expense,
             categories=categories(session),
-            contracts=list(session.scalars(select(Contract).order_by(Contract.start_date.desc()))),
+            contracts=list(
+                session.scalars(
+                    select(Contract)
+                    .where(Contract.vehicle_id == (vehicle.id if vehicle else None))
+                    .order_by(Contract.start_date.desc())
+                )
+            ),
             documents=documents_for(session, expense_id=expense.id) if expense and expense.id else [],
             today=today(),
             form=form or {},
@@ -474,6 +573,12 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 expense.description = clean(form.get("description"))
                 expense.odometer_km = parse_int(form.get("odometer_km"))
                 expense.contract_id = parse_int(form.get("contract_id"))
+                expense.fuel_liters = parse_float(form.get("fuel_liters"))
+                if expense.fuel_liters is not None and expense.fuel_liters <= 0:
+                    raise ValueError("Le nombre de litres doit être positif")
+                if expense.fuel_liters and not expense.category_id:
+                    fuel = session.scalars(select(Category).where(Category.name == FUEL_CATEGORY)).first()
+                    expense.category_id = fuel.id if fuel else None
                 session.add(expense)
                 session.flush()
                 await save_upload(session, vehicle, form.get("file"), clean(form.get("doc_title")), expense_id=expense.id)
@@ -481,7 +586,8 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
                 session.rollback()
                 return expense_form(request, session, expense if expense.id else None, dict(form), str(exc))
             session.commit()
-        return redirect(request, "/expenses")
+        back = form.get("back") or "/expenses"
+        return redirect(request, back if back.startswith("/") and not back.startswith("//") else "/expenses")
 
     @app.get("/expenses/new", response_class=HTMLResponse)
     def expense_new(request: Request):
@@ -522,9 +628,16 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
     @app.get("/contracts", response_class=HTMLResponse)
     def contract_list(request: Request):
         with Sessions() as session:
-            if get_vehicle(session) is None:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
                 return redirect(request, "/vehicle")
-            contracts = list(session.scalars(select(Contract).order_by(Contract.end_date.is_(None), Contract.start_date.desc())))
+            contracts = list(
+                session.scalars(
+                    select(Contract)
+                    .where(Contract.vehicle_id == vehicle.id)
+                    .order_by(Contract.end_date.is_(None), Contract.start_date.desc())
+                )
+            )
             return render(request, "contracts.html", contracts=contracts, today=today(), periods=PERIODS)
 
     def coverage_rows(contract: Contract | None, form) -> list[dict]:
@@ -664,9 +777,14 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
     @app.get("/maintenance", response_class=HTMLResponse)
     def maintenance_list(request: Request):
         with Sessions() as session:
-            if get_vehicle(session) is None:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
                 return redirect(request, "/vehicle")
-            items = list(session.scalars(select(Maintenance).order_by(Maintenance.date.desc())))
+            items = list(
+                session.scalars(
+                    select(Maintenance).where(Maintenance.vehicle_id == vehicle.id).order_by(Maintenance.date.desc())
+                )
+            )
             spent = dict(
                 session.execute(
                     select(Expense.maintenance_id, func.sum(Expense.amount_cents))
@@ -771,9 +889,10 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
     @app.get("/documents", response_class=HTMLResponse)
     def document_list(request: Request, q: str = ""):
         with Sessions() as session:
-            if get_vehicle(session) is None:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
                 return redirect(request, "/vehicle")
-            query = select(Document).order_by(Document.uploaded_at.desc())
+            query = select(Document).where(Document.vehicle_id == vehicle.id).order_by(Document.uploaded_at.desc())
             if q.strip():
                 like = f"%{q.strip()}%"
                 query = query.where(Document.title.ilike(like) | Document.original_name.ilike(like))

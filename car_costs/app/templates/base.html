@@ -9,16 +9,27 @@
 <body>
   <nav>
     <strong>Frais de voiture</strong>
+    {% if vehicles|length > 1 and current %}
+    <form method="post" class="switcher" action="{{ base }}/vehicles/select">
+      <input type="hidden" name="back" value="{{ request.url.path.removeprefix(base) if request.method == 'GET' else '/' }}">
+      <select name="vehicle" aria-label="Voiture" onchange="this.form.submit()">
+        {% for v in vehicles %}<option value="{{ v.id }}"{% if v.id == current.id %} selected{% endif %}>{{ v.name }}{% if v.archived %} (archivée){% endif %}</option>{% endfor %}
+      </select>
+      <noscript><button>Choisir</button></noscript>
+    </form>
+    {% endif %}
     <a href="{{ base }}/">Tableau de bord</a>
     <a href="{{ base }}/expenses">Dépenses</a>
-    <a href="{{ base }}/charging">Recharges</a>
+    {% if not current or current.plugs_in %}<a href="{{ base }}/charging">Recharges</a>{% endif %}
+    {% if current and current.fuelled %}<a href="{{ base }}/fuel">Carburant</a>{% endif %}
     <a href="{{ base }}/contracts">Contrats</a>
     <a href="{{ base }}/maintenance">Entretien</a>
     <a href="{{ base }}/tires">Pneus</a>
-    <a href="{{ base }}/battery">Batterie</a>
+    {% if not current or current.plugs_in %}<a href="{{ base }}/battery">Batterie</a>{% endif %}
     <a href="{{ base }}/reminders">Rappels</a>
     <a href="{{ base }}/documents">Documents</a>
     <a href="{{ base }}/vehicle">Véhicule</a>
+    <a href="{{ base }}/vehicles">Voitures</a>
   </nav>
   <main>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}

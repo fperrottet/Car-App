@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="row">
+  <h1>Voitures</h1>
+  <a class="button" href="{{ base }}/vehicles/new">Ajouter une voiture</a>
+</header>
+<p class="muted">Chaque voiture a ses propres dépenses, contrats, entretiens, pneus, rappels et documents. Choisis la voiture affichée avec le menu en haut de page.</p>
+<div class="vehicles">
+  {% for r in rows %}
+  {% set v = r.vehicle %}
+  <article class="card{{ ' archived' if v.archived }}{{ ' active' if current and v.id == current.id }}">
+    <h2>{{ v.name }}</h2>
+    <p>
+      <span class="badge">{{ v.energy_name }}</span>
+      <span class="badge">{{ "connectée à Home Assistant" if v.is_connected else "non connectée" }}</span>
+      {% if v.archived %}<span class="badge">archivée</span>{% endif %}
+    </p>
+    <p class="muted">{{ [[v.make, v.model]|select|join(" "), v.plate, (r.km|km ~ " km") if r.km else none]|select|join(" · ") }}</p>
+    <p>{{ year }} : <strong>{{ r.year.total_with_depreciation|money }} CHF</strong>{% if r.year.per_km_cents is not none %} · {{ "%.2f"|format(r.year.per_km_cents / 100) }} CHF/km{% endif %}</p>
+    <div class="actions">
+      {% if not current or v.id != current.id %}
+      <form method="post" action="{{ base }}/vehicles/select"><input type="hidden" name="vehicle" value="{{ v.id }}"><button>Afficher</button></form>
+      {% endif %}
+      <form method="post" action="{{ base }}/vehicles/select"><input type="hidden" name="vehicle" value="{{ v.id }}"><input type="hidden" name="back" value="/vehicle"><button class="secondary">Modifier</button></form>
+      <form method="post" action="{{ base }}/vehicles/{{ v.id }}/archive"><button class="link">{{ "Remettre en service" if v.archived else "Archiver (vendue)" }}</button></form>
+    </div>
+    <details>
+      <summary class="muted">Supprimer définitivement</summary>
+      <form method="post" action="{{ base }}/vehicles/{{ v.id }}/delete" class="inline">
+        <input name="confirm" placeholder="tape « {{ v.name }} »" aria-label="Nom de la voiture" required>
+        <button class="link danger">Supprimer la voiture et toutes ses données</button>
+      </form>
+    </details>
+  </article>
+  {% endfor %}
+</div>
+{% endblock %}
