@@ -105,3 +105,44 @@ nav .switcher select { font-weight: 600; padding: 4px 8px; }
 .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
 [hidden] { display: none !important; }
 .vehicles .card h2 { margin: 0; }
+
+/* Frise des pneus */
+.tl-tools { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin: 12px 0; }
+.tl-tools label, .tl-season { display: inline-flex; flex-direction: row; gap: 6px; align-items: center; color: var(--text); font-size: 14px; }
+.tl-scroller { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.tl { position: relative; padding-bottom: 6px; width: max-content; min-width: 100%; }
+.tl-axis { position: relative; height: 28px; border-bottom: 1px solid var(--line); margin-left: 84px; }
+.tl-tick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--line); font-size: 12px; color: var(--muted); padding: 5px 0 0 5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tl-tick.month { height: 6px; top: auto; bottom: 0; padding: 0; }
+.tl-lane { display: flex; height: 62px; border-bottom: 1px dashed var(--line); }
+.tl-label { position: sticky; left: 0; z-index: 3; width: 84px; flex: none; display: grid; align-content: center; padding-left: 12px; background: var(--surface); font-weight: 600; }
+.tl-track { position: relative; flex: none; }
+.tl-track.drop, .tl-track.armed { background: var(--accent-soft); cursor: copy; }
+.tl-bar { position: absolute; top: 9px; bottom: 9px; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600; padding: 3px 8px; overflow: hidden; white-space: nowrap; cursor: pointer; display: flex; flex-direction: column; justify-content: center; box-shadow: inset 0 -2px 0 rgba(0,0,0,.18); }
+.tl-bar small { font-weight: 400; opacity: .9; font-variant-numeric: tabular-nums; }
+.tl-bar.hiver { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.25) 0 6px, transparent 6px 12px); }
+.tl-bar.selected { outline: 3px solid var(--text); outline-offset: 1px; }
+.tl-handle { position: absolute; top: 4px; bottom: 4px; width: 16px; margin-left: -8px; cursor: ew-resize; z-index: 2; touch-action: none; display: grid; place-items: center; }
+.tl-handle::before { content: ""; width: 4px; height: 70%; border-radius: 2px; background: var(--text); opacity: .5; }
+.tl-handle:hover::before, .tl-handle.active::before, .tl-handle:focus-visible::before { opacity: 1; background: var(--accent); }
+.tl-today { position: absolute; top: 0; bottom: 0; border-left: 2px solid var(--danger); z-index: 1; pointer-events: none; }
+.tl-tip { position: fixed; z-index: 20; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 6px; }
+.tl-toast { min-height: 1.4em; color: var(--accent); margin: 8px 0; }
+.tl-toast.err { color: var(--danger); }
+.tl-panel h3 { margin: 0 0 8px; }
+.tl-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px 16px; margin-bottom: 12px; }
+.tl-facts span { display: block; color: var(--muted); font-size: 12px; }
+.tl-facts b { font-variant-numeric: tabular-nums; }
+.tl-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.tl-row input { width: auto; }
+.tl-sets { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.tl-set { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; align-content: start; background: var(--surface); }
+.tl-set-name { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+.tl-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.tl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tl-chip { display: inline-flex; gap: 6px; align-items: center; border-radius: 99px; padding: 3px 10px 3px 4px; font-size: 13px; border: 1px solid var(--line); background: var(--bg); color: var(--text); touch-action: none; user-select: none; cursor: pointer; }
+.tl-chip.free { cursor: grab; border-color: var(--accent); }
+.tl-chip.picked { outline: 2px solid var(--accent); }
+.tl-chip.retired { color: var(--muted); text-decoration: line-through; }
+.tl-chip i { width: 8px; height: 15px; border-radius: 3px; display: block; }
+.tl-ghost { position: fixed; z-index: 30; pointer-events: none; opacity: .9; transform: translate(-50%, -50%); }

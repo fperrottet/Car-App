@@ -15,7 +15,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import costs
-from .models import BatterySnapshot, ChargingSession, OdometerReading, Setting, TireSet, Vehicle
+from . import tires as tire_pairs
+from .models import AXLES, BatterySnapshot, ChargingSession, OdometerReading, Setting, Vehicle
 
 MILES_TO_KM = 1.609344
 # Le recorder de HA garde 10 jours d'historique par défaut.
@@ -394,12 +395,19 @@ def battery_sensors(session: Session, vehicle: Vehicle, today: date, sensors: di
 
 
 def vehicle_sensor(session: Session, vehicle: Vehicle, today: date, sensors: dict, alerts) -> None:
+    points = costs.odometer_points(session, vehicle)
+    km_now = costs.current_km(session, vehicle)
+    mounted = [
+        (period, pair)
+        for pair in tire_pairs.vehicle_pairs(session, vehicle)
+        for period in pair.periods
+        if period.end_date is None and not pair.retired_date
+    ]
     tires = [
-        {"season": t.season, "label": t.label, "size": t.size, "position": t.position, "count": t.count,
-         "km": costs.tire_km(t, costs.odometer_points(session, vehicle), costs.current_km(session, vehicle)),
-         "tread_mm": costs.last_tread(t)}
-        for t in session.scalars(select(TireSet).where(TireSet.vehicle_id == vehicle.id, TireSet.retired_date.is_(None)))
-        if t.current_mount
+        {"season": pair.tire_set.season, "label": pair.label, "size": pair.tire_set.size,
+         "position": AXLES[period.axle].lower(), "count": 2,
+         "km": tire_pairs.pair_km(pair, points, km_now), "tread_mm": tire_pairs.last_tread(pair)}
+        for period, pair in sorted(mounted, key=lambda m: m[0].axle != "avant")
     ]
     inspection = costs.next_inspection(session, vehicle)
     sensors["vehicule"] = (

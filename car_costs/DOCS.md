@@ -6,7 +6,7 @@ Ouvre l'add-on depuis la barre latérale. Au premier lancement, renseigne la fic
 - **Carburant** : pour une voiture thermique ou hybride, note chaque plein (litres, montant, km) sur la page Carburant ; la consommation en l/100 km se calcule entre deux pleins complets.
 - **Contrats** : un contrat avec un montant et une périodicité crée tout seul ses échéances dans les dépenses. Pour une nouvelle prime au renouvellement, termine l'ancien contrat et crée-en un nouveau.
 - **Coût par km** : calculé à partir des relevés du compteur (page Véhicule) et des km saisis dans les entretiens et dépenses.
-- **Pneus** : saisis chaque achat (2 ou 4 pneus) ; en montant un jeu, ceux qui occupaient la même place sont démontés. Note la sculpture au démontage pour être averti avant qu'ils soient usés.
+- **Pneus** : saisis chaque achat (2 ou 4 pneus) ; il est découpé en paires. Sur la frise, glisse une paire du garage sur l'avant ou l'arrière (au téléphone : touche la paire puis l'essieu), tire les poignées pour corriger une date, touche une période pour noter la sculpture, la démonter ou éliminer la paire. Les jeux saisis avant la 0.7 sont repris automatiquement (un jeu de 4 : paire A à l'avant, paire B à l'arrière).
 - **Économies** : renseigne sur la page Véhicule la consommation d'une voiture à essence équivalente et un prix de l'essence relevé près de chez toi ; les autres mois suivent l'indice suisse de l'OFEN.
 - **Batterie** : les entités OVMS sont cherchées automatiquement ; la page Batterie liste celles trouvées, et tu peux en imposer une sur la page Véhicule.
 - **Rappels** : la prochaine expertise se calcule depuis la 1re immatriculation (case B de la carte grise) ; ajoute ensuite chaque expertise passée.

@@ -19,8 +19,6 @@ from .models import (
     Maintenance,
     OdometerReading,
     Reminder,
-    TireMount,
-    TireSet,
     Vehicle,
 )
 from .util import add_months, format_date, format_km
@@ -368,29 +366,17 @@ def next_inspection(session: Session, vehicle: Vehicle) -> date | None:
 
 
 def km_at(points: list[tuple[date, int]], day: date) -> int | None:
-    before = [km for d, km in points if d <= day]
-    return max(before) if before else None
-
-
-def mount_km(mount: TireMount, points: list[tuple[date, int]], km_now: int | None) -> int | None:
-    """Km parcourus pendant une période de montage (en cours : jusqu'à aujourd'hui)."""
-    start = mount.mounted_km if mount.mounted_km is not None else km_at(points, mount.mounted_date)
-    if mount.removed_date is None:
-        end = km_now
-    else:
-        end = mount.removed_km if mount.removed_km is not None else km_at(points, mount.removed_date)
-    if start is None or end is None or end < start:
+    """Compteur estimé à une date : interpolé entre les relevés qui l'entourent."""
+    before = [(d, km) for d, km in points if d <= day]
+    after = [(d, km) for d, km in points if d > day]
+    if not before:
         return None
-    return end - start
-
-
-def tire_km(tire_set: TireSet, points: list[tuple[date, int]], km_now: int | None) -> int:
-    return sum(mount_km(m, points, km_now) or 0 for m in tire_set.mounts)
-
-
-def last_tread(tire_set: TireSet) -> float | None:
-    measured = [m.tread_mm for m in tire_set.mounts if m.tread_mm is not None]
-    return measured[-1] if measured else None
+    d0, k0 = max(before, key=lambda p: (p[1], p[0]))
+    later = [(d, km) for d, km in after if km >= k0]
+    if not later:
+        return k0
+    d1, k1 = min(later)
+    return round(k0 + (k1 - k0) * (day - d0).days / (d1 - d0).days) if d1 > d0 else k0
 
 
 # ---------------------------------------------------------------- économies face à l'essence
@@ -521,16 +507,18 @@ def reminders(session: Session, vehicle: Vehicle, today: date) -> list[Alert]:
         elif r.due_km and km_now is not None and r.due_km - km_now <= 1500:
             items.append(Alert(today, f"{r.title} (à {format_km(r.due_km)} km)", km_now >= r.due_km))
 
-    sets = list(session.scalars(select(TireSet).where(TireSet.vehicle_id == vehicle.id, TireSet.retired_date.is_(None))))
-    mounted = {s.season for s in sets if s.current_mount}
+    from . import tires  # tires importe costs
+
+    pairs = [p for p in tires.vehicle_pairs(session, vehicle) if not p.retired_date]
+    mounted = {p.tire_set.season for p in pairs if any(q.end_date is None for q in p.periods)}
     if "été" in mounted and today.month in (10, 11):
         items.append(Alert(today, "Pneus d'été montés : penser aux pneus d'hiver (d'octobre à Pâques)", False))
     if "hiver" in mounted and (3, 15) <= (today.month, today.day) <= (5, 15):
         items.append(Alert(today, "Pneus d'hiver montés : repasser aux pneus d'été", False))
-    for s in sets:
-        tread = last_tread(s)
-        if tread is not None and tread < TREAD_ADVISED_MM.get(s.season, 3.0):
-            items.append(Alert(today, f"Pneus {s.label} : {tread:.1f} mm mesurés, à remplacer bientôt", tread < 1.6))
+    for p in pairs:
+        tread = tires.last_tread(p)
+        if tread is not None and tread < TREAD_ADVISED_MM.get(p.tire_set.season, 3.0):
+            items.append(Alert(today, f"Pneus {p.label} : {tread:.1f} mm mesurés, à remplacer bientôt", tread < 1.6))
     return sorted(items, key=lambda r: r.when)
 
 @dataclass

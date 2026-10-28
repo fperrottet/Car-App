@@ -20,7 +20,7 @@ Add-on Home Assistant pour suivre tous les frais d'une voiture électrique : dé
 - Recharges d'avant EVCC estimées jour par jour : km (répartis entre deux relevés) × consommation relevée × 1/0,9 de pertes × prix du kWh à cette date (tarifs saisis sur la page Recharges, sinon prix moyen d'EVCC). Désactivable sur la page Véhicule.
 - Import CSV des relevés du compteur (Date ; Km ; kWh/100 km) et des dépenses (même format que l'export).
 - Graphique : coût par km cumulé et km parcourus par mois.
-- Pneus : jeux de 2 ou 4 pneus (saison, marque, dimension, indice, DOT), montages et démontages, km parcourus par jeu, sculpture mesurée ; rappel du changement été/hiver et des pneus usés.
+- Pneus suivis par paire (un achat de 4 = 2 paires) sur une frise avant / arrière : glisser une paire du garage sur un essieu pour la monter, tirer une poignée pour corriger une date de changement (avant et arrière ensemble), changement de saison en un clic, élimination d'une seule paire d'un lot ; km par période et par paire, sculpture mesurée, rappels du changement été/hiver et des pneus usés.
 - Économies face à une voiture à essence : km du mois × consommation × prix de l'essence (ton prix de référence, suivi mois par mois par l'indice des prix de l'essence de l'OFEN), moins l'électricité payée.
 - Santé de la batterie : SoH global et SoH de chaque cellule lus chaque jour depuis OVMS via Home Assistant (métriques `xvu.b.soh.charge`, `xvu.b.c.soh`, `xvu.b.hist.soh.mod.*`, recherche automatique des entités), courbe dans le temps et cellule la plus faible.
 - Rappels administratifs : expertise calculée depuis la 1re immatriculation (Fribourg : 5 ans, puis 3, puis tous les 2 ans), rappels libres ou périodiques (vignette, garanties, impôt).

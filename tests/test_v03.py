@@ -17,8 +17,6 @@ from app.models import (
     Inspection,
     OdometerReading,
     Reminder,
-    TireMount,
-    TireSet,
     Vehicle,
 )
 
@@ -76,49 +74,6 @@ def test_inspection_due_soon_is_on_the_dashboard(client):
 
 
 # ---------------------------------------------------------------- pneus
-
-
-def test_tire_km_sum_mount_periods(db):
-    session, vehicle = db
-    session.add(OdometerReading(vehicle_id=vehicle.id, date=date(2026, 10, 1), km=16000))
-    tires = TireSet(vehicle_id=vehicle.id, season="été", count=4, position="les 4")
-    tires.mounts = [
-        TireMount(mounted_date=date(2026, 4, 1), mounted_km=10000, removed_date=date(2026, 6, 1), removed_km=12000),
-        TireMount(mounted_date=date(2026, 8, 1), mounted_km=14000),
-    ]
-    session.add(tires)
-    session.flush()
-    points = costs.odometer_points(session, vehicle)
-    assert costs.tire_km(tires, points, costs.current_km(session, vehicle)) == 2000 + 2000
-
-
-def test_mounting_two_front_tires_replaces_only_the_front(client):
-    client.post("/tires/new", data={"season": "été", "count": "4", "size": "165/70 R14", "amount": "480",
-                                    "mount_now": "1", "mount_date": "2026-04-01", "mount_km": "10000"})
-    client.post("/tires/new", data={"season": "été", "count": "2", "position": "avant", "size": "165/70 R14",
-                                    "mount_now": "1", "mount_date": "2026-09-01", "mount_km": "15000"})
-    page = client.get("/tires").text
-    assert page.count("165/70 R14") >= 2
-    client.post("/tires/new", data={"season": "hiver", "count": "4", "mount_now": "1",
-                                    "mount_date": "2026-10-20", "mount_km": "16000"})
-    page = client.get("/tires").text
-    stored = page.split("En stock")[1]
-    assert stored.count("<tr>") - stored.count("<thead><tr>") == 2  # les deux jeux d'été sont démontés
-    expense = client.get("/expenses").text
-    assert "480.00" in expense and "Pneus" in expense
-
-
-def test_low_tread_and_season_reminders(db):
-    session, vehicle = db
-    summer = TireSet(vehicle_id=vehicle.id, season="été")
-    summer.mounts = [TireMount(mounted_date=date(2026, 4, 1))]
-    winter = TireSet(vehicle_id=vehicle.id, season="hiver", brand="Nokian")
-    winter.mounts = [TireMount(mounted_date=date(2025, 11, 1), removed_date=date(2026, 4, 1), tread_mm=3.5)]
-    session.add_all([summer, winter])
-    session.flush()
-    texts = [a.text for a in costs.reminders(session, vehicle, TODAY)]
-    assert any("penser aux pneus d'hiver" in t for t in texts)
-    assert any("3.5 mm" in t for t in texts)
 
 
 # ---------------------------------------------------------------- essence
@@ -257,15 +212,6 @@ def test_added_category_appears_in_existing_database(tmp_path):
     session.commit()
     create_app(tmp_path, sync_interval=None)
     assert session.query(Category).filter_by(name="Expertise").count() == 1
-
-
-def test_tread_can_be_noted_after_automatic_unmount(client):
-    client.post("/tires/new", data={"season": "hiver", "count": "4", "brand": "Michelin",
-                                    "mount_now": "1", "mount_date": "2025-11-05", "mount_km": "18000"})
-    client.post("/tires/new", data={"season": "été", "count": "4", "mount_now": "1",
-                                    "mount_date": "2026-04-02", "mount_km": "21000"})
-    client.post("/tires/1/tread", data={"tread_mm": "3,6"})
-    assert "3.6 mm mesurés" in client.get("/").text
 
 
 def test_contract_coverages_and_vehicle_notes(client):

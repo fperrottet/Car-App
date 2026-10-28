@@ -38,6 +38,7 @@ FUELLED = {"essence", "diesel", "hybride rechargeable", "hybride"}
 
 TIRE_SEASONS = ["été", "hiver", "4 saisons"]
 TIRE_POSITIONS = ["les 4", "avant", "arrière"]
+AXLES = {"avant": "Avant", "arriere": "Arrière"}
 
 
 class Vehicle(Base):
@@ -276,7 +277,7 @@ class Setting(Base):
 
 
 class TireSet(Base):
-    """Un achat de pneus (souvent 2 par 2), suivi sur ses périodes de montage."""
+    """Un achat de pneus (2 ou 4), découpé en paires suivies chacune sur la frise."""
 
     __tablename__ = "tire_set"
 
@@ -295,8 +296,12 @@ class TireSet(Base):
     retired_date: Mapped[date | None]
     notes: Mapped[str | None] = mapped_column(Text)
 
+    # Ancien suivi par jeu (avant la 0.7), repris dans les paires au démarrage.
     mounts: Mapped[list["TireMount"]] = relationship(
         back_populates="tire_set", cascade="all, delete-orphan", order_by="TireMount.mounted_date"
+    )
+    pairs: Mapped[list["TirePair"]] = relationship(
+        back_populates="tire_set", cascade="all, delete-orphan", order_by="TirePair.name"
     )
     expense: Mapped[Expense | None] = relationship()
 
@@ -306,8 +311,12 @@ class TireSet(Base):
         return " ".join(p for p in parts if p) or f"Pneus {self.season}"
 
     @property
-    def current_mount(self) -> "TireMount | None":
-        return next((m for m in self.mounts if m.removed_date is None), None)
+    def mounted(self) -> bool:
+        return any(p.end_date is None for pair in self.pairs for p in pair.periods)
+
+    @property
+    def retired(self) -> bool:
+        return bool(self.pairs) and all(pair.retired_date for pair in self.pairs)
 
 
 class TireMount(Base):
@@ -322,6 +331,44 @@ class TireMount(Base):
     tread_mm: Mapped[float | None]
 
     tire_set: Mapped[TireSet] = relationship(back_populates="mounts")
+
+
+class TirePair(Base):
+    """Deux pneus d'un même achat, montés ensemble sur un essieu."""
+
+    __tablename__ = "tire_pair"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tire_set_id: Mapped[int] = mapped_column(ForeignKey("tire_set.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(10))  # « A », « B »
+    retired_date: Mapped[date | None]
+
+    tire_set: Mapped[TireSet] = relationship(back_populates="pairs")
+    periods: Mapped[list["TirePeriod"]] = relationship(
+        back_populates="pair", cascade="all, delete-orphan", order_by="TirePeriod.start_date"
+    )
+
+    @property
+    def label(self) -> str:
+        return f"{self.tire_set.label} · paire {self.name}"
+
+
+class TirePeriod(Base):
+    """Une paire montée sur un essieu, de start_date à end_date (vide : encore montée)."""
+
+    __tablename__ = "tire_period"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pair_id: Mapped[int] = mapped_column(ForeignKey("tire_pair.id", ondelete="CASCADE"))
+    axle: Mapped[str] = mapped_column(String(10))  # « avant » ou « arriere »
+    start_date: Mapped[date]
+    end_date: Mapped[date | None]
+    # Km relevés au garage ; vides : déduits des relevés du compteur.
+    start_km: Mapped[int | None]
+    end_km: Mapped[int | None]
+    tread_mm: Mapped[float | None]  # sculpture mesurée au démontage
+
+    pair: Mapped[TirePair] = relationship(back_populates="periods")
 
 
 class Inspection(Base):
