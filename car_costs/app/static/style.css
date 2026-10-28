@@ -129,7 +129,16 @@ nav .switcher select { font-weight: 600; padding: 4px 8px; }
 .tl-tip { position: fixed; z-index: 20; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 6px; }
 .tl-toast { min-height: 1.4em; color: var(--accent); margin: 8px 0; }
 .tl-toast.err { color: var(--danger); }
-.tl-panel h3 { margin: 0 0 8px; }
+.tl-panel h3 { margin: 0; }
+.tl-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tl-table { overflow-x: auto; margin: 8px 0; }
+.tl-table table { min-width: 620px; }
+.tl-table td, .tl-table th { padding: 6px 8px; vertical-align: middle; }
+.tl-table input, .tl-table select { width: auto; max-width: 150px; }
+.tl-table input[name=tread_mm] { width: 70px; }
+.tl-table tr.selected td { background: var(--accent-soft); }
+.tl-row-actions { white-space: nowrap; }
+.tl-row-actions button { margin-right: 8px; }
 .tl-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px 16px; margin-bottom: 12px; }
 .tl-facts span { display: block; color: var(--muted); font-size: 12px; }
 .tl-facts b { font-variant-numeric: tabular-nums; }
@@ -146,3 +155,16 @@ nav .switcher select { font-weight: 600; padding: 4px 8px; }
 .tl-chip.retired { color: var(--muted); text-decoration: line-through; }
 .tl-chip i { width: 8px; height: 15px; border-radius: 3px; display: block; }
 .tl-ghost { position: fixed; z-index: 30; pointer-events: none; opacity: .9; transform: translate(-50%, -50%); }
+@media (max-width: 640px) {
+  .tl-table table { min-width: 0; border: none; background: none; }
+  .tl-table thead { display: none; }
+  .tl-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; padding: 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  .tl-table td { display: block; padding: 0; border: none; text-align: left; }
+  .tl-table td:empty { display: none; }
+  .tl-table td.num { align-self: center; }
+  .tl-table tr.selected { background: var(--accent-soft); border-color: var(--accent); }
+  .tl-table tr.selected td { background: none; }
+  .tl-table td.num:not(:empty)::after { content: " km"; }
+  .tl-table input, .tl-table select { max-width: none; width: 100%; }
+  .tl-table .tl-row-actions, .tl-table tfoot td:last-child { grid-column: 1 / -1; }
+}

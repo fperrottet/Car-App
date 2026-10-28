@@ -152,6 +152,30 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
         return await timeline_action(request, lambda session, vehicle, data: tires.move_change(
             session, vehicle, owned(session, vehicle, TirePeriod, data.get("period")), day(data), bool(data.get("linked")), today()))
 
+    def optional_day(data, key) -> date | None:
+        return parse_date(str(data.get(key) or ""))
+
+    @app.post("/tires/timeline/save")
+    async def timeline_save(request: Request):
+        def action(session, vehicle, data):
+            period = owned(session, vehicle, TirePeriod, data.get("period"))
+            message = tires.set_period(session, vehicle, period, str(data.get("axle")), optional_day(data, "start"),
+                                       optional_day(data, "end"), today())
+            if "tread_mm" in data:
+                period.tread_mm = tread(data)
+            return message
+        return await timeline_action(request, action)
+
+    @app.post("/tires/timeline/add")
+    async def timeline_add(request: Request):
+        def action(session, vehicle, data):
+            pair = owned(session, vehicle, TirePair, data.get("pair"))
+            period = TirePeriod(axle="avant", start_date=today())
+            pair.periods.append(period)
+            return tires.set_period(session, vehicle, period, str(data.get("axle")), optional_day(data, "start"),
+                                    optional_day(data, "end"), today())
+        return await timeline_action(request, action)
+
     @app.post("/tires/timeline/delete")
     async def timeline_delete(request: Request):
         return await timeline_action(request, lambda session, vehicle, data: tires.delete_period(

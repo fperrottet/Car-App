@@ -4,7 +4,7 @@
   <h1>Pneus</h1>
   <a class="button" href="{{ base }}/tires/new">Nouvel achat</a>
 </header>
-<p class="muted">Chaque achat est suivi par paire : 4 pneus font 2 paires. Glisse une paire du garage sur l'avant ou l'arrière pour la monter (au téléphone : touche la paire, puis l'essieu). Tire une poignée pour corriger une date. Touche une période pour la détailler.</p>
+<p class="muted">Chaque achat est suivi par paire : 4 pneus font 2 paires. Glisse une paire du garage sur l'avant ou l'arrière pour la monter (au téléphone : touche la paire, puis l'essieu). Tire une poignée pour corriger une date. Clique sur une période ou une paire pour saisir ses dates de montage et de démontage, ajouter ou supprimer des périodes.</p>
 
 <div class="tl-tools">
   <label><input type="checkbox" id="tl-link" checked> Avant et arrière changés le même jour</label>
@@ -22,5 +22,5 @@
 <p class="muted">Les km de chaque période sont tirés des relevés du compteur. Le prix d'un achat crée une dépense « Pneus ».</p>
 
 <script type="application/json" id="tl-data">{{ timeline|tojson }}</script>
-<script src="{{ base }}/static/tires.js" data-base="{{ base }}"></script>
+<script src="{{ base }}/static/tires.js?v={{ asset_v }}" data-base="{{ base }}"></script>
 {% endblock %}

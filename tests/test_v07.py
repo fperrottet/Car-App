@@ -171,3 +171,47 @@ def test_old_tyre_sets_are_migrated_to_pairs(tmp_path):
     assert all(p.retired_date == date(2024, 4, 1) for p in gone.pairs)
     assert tires.migrate(session) == 0  # une seule fois
     session.close()
+
+
+def period_ids(client, season, name):
+    with db(client) as session:
+        return [p.id for p in session.query(TirePeriod).order_by(TirePeriod.start_date)
+                if p.pair.tire_set.season == season and p.pair.name == name]
+
+
+def test_editing_dates_of_a_period_trims_the_other_pair_on_the_axle(client):
+    buy(client, mount_now="1", mount_date="2022-02-21")
+    buy(client, season="hiver", purchase_date="2022-10-28")
+    act(client, "season", date="2022-11-05")
+    [winter] = period_ids(client, "hiver", "A")
+    res = act(client, "save", period=winter, axle="avant", start="2022-10-20", end="2023-04-02", tread_mm="6.5")
+    assert res.status_code == 200, res.json()
+    front = lanes(client)["avant"]
+    assert front[:2] == [("été", "A", "2022-02-21", "2022-10-20"), ("hiver", "A", "2022-10-20", "2023-04-02")]
+    with db(client) as session:
+        assert session.get(TirePeriod, winter).tread_mm == 6.5
+    # Fin avant le début : refusé.
+    res = act(client, "save", period=winter, axle="avant", start="2023-04-02", end="2023-01-01")
+    assert res.status_code == 400 and "error" in res.json()
+
+
+def test_adding_and_deleting_periods_by_hand(client):
+    buy(client, mount_now="1", mount_date="2022-02-21")
+    buy(client, season="hiver", purchase_date="2022-10-28")
+    winter_a = pair_ids(client)[("hiver", 4, "A")]
+    assert act(client, "add", pair=winter_a, axle="avant", start="2022-11-05", end="2023-04-01").status_code == 200
+    assert act(client, "add", pair=winter_a, axle="avant", start="2023-11-04").status_code == 200
+    front = lanes(client)["avant"]
+    assert ("hiver", "A", "2022-11-05", "2023-04-01") in front and front[-1] == ("hiver", "A", "2023-11-04", None)
+    # Une période qui chevauche une autre de la même paire est refusée, sans rien laisser derrière.
+    res = act(client, "add", pair=winter_a, axle="arriere", start="2023-01-01", end="2023-02-01")
+    assert res.status_code == 400
+    assert len(period_ids(client, "hiver", "A")) == 2
+    first = period_ids(client, "hiver", "A")[0]
+    assert act(client, "delete", period=first).status_code == 200
+    assert len(period_ids(client, "hiver", "A")) == 1
+
+
+def test_static_files_are_cache_busted(client):
+    page = client.get("/tires").text
+    assert "style.css?v=" in page and "tires.js?v=" in page

@@ -46,7 +46,7 @@ def test_links_follow_the_ingress_prefix(client):
     response = client.get("/", headers={"X-Ingress-Path": prefix}, follow_redirects=False)
     assert response.headers["location"] == f"{prefix}/vehicle"
     page = client.get("/vehicle", headers={"X-Ingress-Path": prefix}).text
-    assert f'href="{prefix}/static/style.css"' in page
+    assert f'href="{prefix}/static/style.css?v=' in page
 
 
 def test_expense_with_invoice(car):
