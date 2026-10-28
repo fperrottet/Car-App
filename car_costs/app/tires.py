@@ -141,7 +141,7 @@ def mount(session: Session, vehicle: Vehicle, pair: TirePair, axle: str, day: da
     if current:
         message += f" ; {current.pair.label} retourne au garage"
         if current.start_date == day:
-            session.delete(current)
+            current.pair.periods.remove(current)  # delete-orphan : supprimée
         else:
             current.end_date, current.end_km = day, None
     pair.periods.append(TirePeriod(axle=axle, start_date=day, end_date=end))
@@ -182,9 +182,73 @@ def delete_period(session: Session, vehicle: Vehicle, period: TirePeriod) -> str
     if before:
         before.end_date, before.end_km = period.end_date, period.end_km
     label = period.pair.label
-    session.delete(period)
+    period.pair.periods.remove(period)
     session.flush()
     return f"Période supprimée : {label}"
+
+
+FAR = date(9999, 12, 31)
+
+
+def clear_axle(session: Session, vehicle: Vehicle, axle: str, start: date, end: date | None, keep: TirePeriod) -> list[str]:
+    """Libère l'essieu entre start et end pour la période « keep » : les autres paires
+    y sont raccourcies, coupées en deux ou retirées. Renvoie ce qui a changé."""
+    stop = end or FAR
+    changes = []
+    for q in lane(session, vehicle, axle):
+        if q is keep:
+            continue
+        q_end = q.end_date or FAR
+        if q_end <= start or q.start_date >= stop:
+            continue
+        name = q.pair.label
+        if q.start_date >= start and q_end <= stop:
+            q.pair.periods.remove(q)
+            changes.append(f"{name} retirée de cette période")
+        elif q.start_date < start and q_end > stop:
+            q.pair.periods.append(TirePeriod(axle=axle, start_date=stop, end_date=q.end_date, end_km=q.end_km))
+            q.end_date, q.end_km = start, None
+            changes.append(f"{name} coupée en deux")
+        elif q.start_date < start:
+            q.end_date, q.end_km = start, None
+            changes.append(f"{name} démontée le {format_date(start)}")
+        else:
+            q.start_date, q.start_km = stop, None
+            changes.append(f"{name} montée le {format_date(stop)}")
+    return changes
+
+
+def set_period(session: Session, vehicle: Vehicle, period: TirePeriod, axle: str, start: date | None,
+               end: date | None, today: date) -> str:
+    """Dates d'entrée et de sortie saisies à la main pour une période (nouvelle ou existante)."""
+    if axle not in AXLES:
+        raise TimelineError("Choisis l'avant ou l'arrière")
+    if start is None:
+        raise TimelineError("Date de montage manquante")
+    if start > today or (end and end > today):
+        raise TimelineError("Les dates ne peuvent pas être dans le futur")
+    if end is not None and end <= start:
+        raise TimelineError("La date de démontage doit suivre la date de montage")
+    pair = period.pair
+    if pair.retired_date and (end is None or end > pair.retired_date):
+        raise TimelineError(f"Cette paire a été éliminée le {format_date(pair.retired_date)} : démonte-la au plus tard ce jour-là")
+    for other in pair.periods:
+        if other is not period and other.start_date < (end or FAR) and start < (other.end_date or FAR):
+            raise TimelineError(
+                f"Cette paire est déjà à {axle_name(other.axle)} du {format_date(other.start_date)}"
+                f" au {format_date(other.end_date) if other.end_date else 'aujourd’hui'}"
+            )
+    if start != period.start_date:
+        period.start_km = None
+    if end != period.end_date:
+        period.end_km = None
+    period.axle, period.start_date, period.end_date = axle, start, end
+    session.flush()
+    changes = clear_axle(session, vehicle, axle, start, end, period)
+    session.flush()
+    span = f"du {format_date(start)} au {format_date(end)}" if end else f"depuis le {format_date(start)}"
+    message = f"{pair.label} à {axle_name(axle)} {span}"
+    return message + (f" ; {', '.join(changes)}" if changes else "")
 
 
 def end_period(period: TirePeriod, day: date, tread: float | None) -> str:

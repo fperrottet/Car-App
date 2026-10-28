@@ -1,6 +1,7 @@
 """Application web : routes et rendu des pages."""
 
 import asyncio
+import hashlib
 import csv
 import io
 import logging
@@ -61,6 +62,10 @@ templates.env.filters["amount"] = format_amount
 templates.env.filters["iso"] = lambda d: d.isoformat() if d else ""
 templates.env.filters["options"] = lambda items, attr="name": [(i.id, getattr(i, attr)) for i in items]
 templates.env.filters["zip_self"] = lambda items: [(i, i) for i in items]
+# Change à chaque version des fichiers statiques : le navigateur ne garde pas l'ancien CSS en cache.
+templates.env.globals["asset_v"] = hashlib.sha1(
+    b"".join(f.read_bytes() for f in sorted((HERE / "static").glob("*.*")))
+).hexdigest()[:10]
 
 
 def create_app(data_dir: Path | None = None, today=date.today, sync_interval: float | None = 3600) -> FastAPI:

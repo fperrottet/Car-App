@@ -9,7 +9,7 @@
 
   let data = JSON.parse(document.getElementById("tl-data").textContent);
   let selected = null; // id de période
-  let picked = null; // paire touchée au téléphone, en attente d'un essieu
+  let picked = null; // paire dont la fiche est ouverte (libre : un essieu touché la monte)
   let busy = false;
 
   const $ = (id) => document.getElementById(id);
@@ -75,7 +75,7 @@
     $("tl").innerHTML = `<div class="tl-axis" style="width:${WIDTH}px">${axis}</div>` + AXLES.map(([axle, name]) => {
       const ps = periods(axle);
       return `<div class="tl-lane"><div class="tl-label">${name}</div>
-        <div class="tl-track ${picked ? "armed" : ""}" data-axle="${axle}" style="width:${WIDTH}px">
+        <div class="tl-track ${picked && isFree(picked) ? "armed" : ""}" data-axle="${axle}" style="width:${WIDTH}px">
           <div class="tl-today" style="left:${x(TODAY)}px" title="Aujourd'hui"></div>
           ${ps.map(bar).join("")}
           ${ps.map((p, i) => (i > 0 && ps[i - 1].end === p.start ? handle(p, name) : "")).join("")}
@@ -121,75 +121,76 @@
       </div>`).join("");
   }
 
+  // Fiche d'une paire : ses périodes sur la voiture, modifiables date par date.
+  const isFree = (id) => { const p = pair(id); return p && !p.retired && !p.axle; };
+
   function renderPanel() {
     const panel = $("tl-panel");
-    if (picked) return pickedPanel(panel);
-    const p = data.periods.find((q) => q.id === selected);
-    if (!p) { panel.hidden = true; return; }
-    const info = pair(p.pair);
-    const isLast = !data.periods.some((q) => q.pair === p.pair && parse(q.start) > parse(p.start));
+    const info = picked && pair(picked);
+    if (!info) { panel.hidden = true; return; }
+    const own = data.periods.filter((q) => q.pair === picked).sort((a, b) => parse(a.start) - parse(b.start));
+    const axleSelect = (name, value) => `<select name="${name}" aria-label="Essieu">${[["avant", "Avant"], ["arriere", "Arrière"]]
+      .map(([v, l]) => `<option value="${v}" ${v === value ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+    const row = (q) => `<tr data-period="${q.id}" class="${q.id === selected ? "selected" : ""}">
+        <td>${axleSelect("axle", q.axle)}</td>
+        <td><input type="date" name="start" value="${q.start}" max="${data.today}" aria-label="Monté le" required></td>
+        <td><input type="date" name="end" value="${q.end || ""}" max="${data.today}" aria-label="Démonté le"></td>
+        <td class="num">${fkm(q.km)}</td>
+        <td><input name="tread_mm" inputmode="decimal" value="${q.tread ?? ""}" placeholder="mm" size="4" aria-label="Sculpture en mm"></td>
+        <td class="tl-row-actions"><button type="button" class="secondary" data-do="save">Enregistrer</button>
+          <button type="button" class="link danger" data-do="delete">Supprimer</button></td>
+      </tr>`;
+    const status = info.retired ? `éliminée le ${fdate(info.retired)}` : info.axle ? `montée à l'${info.axle === "avant" ? "avant" : "arrière"}` : "au garage";
     panel.hidden = false;
-    panel.innerHTML = `<h3>${esc(info.label)} · ${p.axle === "avant" ? "avant" : "arrière"}</h3>
-      <div class="tl-facts">
-        <div><span>Montée le</span><b>${fdate(p.start)}</b></div>
-        <div><span>Démontée le</span><b>${p.end ? fdate(p.end) : "toujours montée"}</b></div>
-        <div><span>Km sur cette période</span><b>${fkm(p.km)}</b></div>
-        <div><span>Km de la paire</span><b>${fkm(info.km)}</b></div>
-        <div><span>Sculpture au démontage</span><b>${p.tread != null ? `${p.tread} mm` : "–"}</b></div>
-      </div>
-      <div class="tl-row">
-        <input id="tl-tread" inputmode="decimal" placeholder="mm" value="${p.tread ?? ""}" aria-label="Sculpture en mm" size="5">
-        <button type="button" class="secondary" data-do="tread">Noter la sculpture</button>
-      </div>
-      ${!p.end ? `<div class="tl-row">
-        <input type="date" id="tl-end" value="${data.today}" max="${data.today}" min="${iso(parse(p.start) + DAY)}" aria-label="Date de démontage">
-        <button type="button" class="secondary" data-do="end">Démonter sans remplacer</button></div>` : ""}
-      <div class="tl-row">
-        ${isLast && !info.retired ? `<input type="date" id="tl-retire" value="${p.end || data.today}" max="${data.today}" aria-label="Date d'élimination">
-          <button type="button" class="secondary" data-do="retire">Éliminer la paire (usée ou vendue)</button>` : ""}
-        <button type="button" class="link danger" data-do="delete">Supprimer cette période</button>
-        <button type="button" class="link" data-do="close">Fermer</button>
-      </div>`;
+    panel.innerHTML = `<div class="tl-panel-head"><h3>${esc(info.label)}</h3>
+        <button type="button" class="link" data-do="close">Fermer</button></div>
+      <p class="muted">${status} · ${fkm(info.km)} km${info.tread != null ? ` · dernière sculpture ${info.tread} mm` : ""}.
+        Corrige les dates d'entrée et de sortie, laisse « démontée » vide si la paire est encore sur la voiture.
+        Les autres paires sur le même essieu s'ajustent toutes seules.</p>
+      <div class="tl-table"><table>
+        <thead><tr><th>Essieu</th><th>Montée le</th><th>Démontée le</th><th class="num">Km</th><th>Sculpture</th><th></th></tr></thead>
+        <tbody>${own.map(row).join("") || `<tr><td colspan="6" class="muted">Jamais montée sur la voiture.</td></tr>`}</tbody>
+        ${info.retired ? "" : `<tfoot><tr data-new="1">
+          <td>${axleSelect("axle", own.length ? own[own.length - 1].axle : "avant")}</td>
+          <td><input type="date" name="start" max="${data.today}" aria-label="Nouvelle période : montée le"></td>
+          <td><input type="date" name="end" max="${data.today}" aria-label="Nouvelle période : démontée le"></td>
+          <td></td><td></td>
+          <td><button type="button" data-do="add">Ajouter une période</button></td></tr></tfoot>`}
+      </table></div>
+      ${isFree(picked) ? `<p class="muted">Pour la monter maintenant, touche un essieu sur la frise à la date voulue${matchMedia("(pointer: fine)").matches ? " ou glisse la paire depuis le garage" : ""}.</p>` : ""}
+      <div class="tl-row">${info.retired
+        ? `<button type="button" class="secondary" data-do="unretire">Remettre au garage</button>`
+        : `<input type="date" id="tl-retire" value="${own.length && own[own.length - 1].end ? own[own.length - 1].end : data.today}" max="${data.today}" aria-label="Date d'élimination">
+           <button type="button" class="secondary" data-do="retire">Éliminer la paire (usée ou vendue)</button>`}</div>`;
   }
 
-  function pickedPanel(panel) {
-    const info = pair(picked);
-    panel.hidden = false;
-    panel.innerHTML = `<h3>Monter ${esc(info.label)}</h3>
-      <p class="muted">Touche un essieu sur la frise à la date voulue, ou choisis une date précise :</p>
-      <div class="tl-row">
-        <input type="date" id="tl-mount-date" value="${data.today}" max="${data.today}" aria-label="Date de montage">
-        <button type="button" data-do="mount" data-axle="avant">À l'avant</button>
-        <button type="button" data-do="mount" data-axle="arriere">À l'arrière</button>
-        <button type="button" class="link" data-do="unpick">Annuler</button>
-      </div>`;
-  }
-
-  // ---------------------------------------------------------------- panneau
+  // ---------------------------------------------------------------- fiche d'une paire
 
   $("tl-panel").addEventListener("click", async (ev) => {
     const btn = ev.target.closest("[data-do]");
     if (!btn) return;
     const what = btn.dataset.do;
-    if (what === "close") { selected = null; return render(); }
-    if (what === "unpick") { picked = null; return render(); }
-    if (what === "mount") {
-      const id = picked;
-      picked = null;
-      return send("mount", { pair: id, axle: btn.dataset.axle, date: $("tl-mount-date").value });
-    }
-    const p = data.periods.find((q) => q.id === selected);
-    if (!p) return;
-    const tread = $("tl-tread")?.value || null;
-    if (what === "tread") return send("tread", { period: p.id, tread_mm: tread });
-    if (what === "end") return send("end", { period: p.id, date: $("tl-end").value, tread_mm: tread });
-    if (what === "retire") return send("retire", { pair: p.pair, date: $("tl-retire").value, tread_mm: tread });
+    if (what === "close") { picked = selected = null; return render(); }
+    if (what === "unretire") return send("unretire", { pair: picked });
+    if (what === "retire") return send("retire", { pair: picked, date: $("tl-retire").value });
+    const tr = btn.closest("tr");
+    const val = (name) => tr.querySelector(`[name="${name}"]`)?.value || null;
+    if (what === "add") return send("add", { pair: picked, axle: val("axle"), start: val("start"), end: val("end") });
+    const id = +tr.dataset.period;
+    if (what === "save") return send("save", { period: id, axle: val("axle"), start: val("start"), end: val("end"), tread_mm: val("tread_mm") });
     if (what === "delete") {
-      if (btn.dataset.confirm) return send("delete", { period: p.id });
+      if (btn.dataset.confirm) return send("delete", { period: id });
       btn.dataset.confirm = "1";
-      btn.textContent = "Confirmer la suppression";
+      btn.textContent = "Confirmer";
     }
   });
+
+  const openPair = (id, period = null) => {
+    picked = picked === id && !period ? null : id;
+    selected = period;
+    render();
+    if (picked) $("tl-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
 
   // ---------------------------------------------------------------- frise : clic, poignées, clavier
 
@@ -201,14 +202,15 @@
 
   $("tl").addEventListener("click", (ev) => {
     const track = ev.target.closest(".tl-track");
-    if (picked && track) {
-      const id = picked;
-      picked = null;
+    if (picked && isFree(picked) && track && !ev.target.closest(".tl-handle")) {
       const t = Math.min(timeAt(ev.clientX - track.getBoundingClientRect().left), TODAY);
-      return send("mount", { pair: id, axle: track.dataset.axle, date: iso(t) });
+      return send("mount", { pair: picked, axle: track.dataset.axle, date: iso(t) });
     }
     const b = ev.target.closest(".tl-bar");
-    if (b) { selected = +b.dataset.period; render(); }
+    if (b) {
+      const p = data.periods.find((q) => q.id === +b.dataset.period);
+      openPair(p.pair, p.id);
+    }
   });
 
   // Les poignées sur l'autre essieu au même jour bougent ensemble si « lier » est coché.
@@ -319,9 +321,7 @@
         ghost.remove();
         if (target) send("mount", { pair: id, axle: target.dataset.axle, date: iso(t) });
       } else {
-        picked = picked === id ? null : id; // simple clic : même chemin qu'au doigt
-        selected = null;
-        render();
+        openPair(id); // simple clic : ouvre la fiche de la paire
       }
     };
     chip.addEventListener("pointermove", move);
@@ -332,17 +332,9 @@
   $("tl-sets").addEventListener("click", (ev) => {
     const chip = ev.target.closest(".tl-chip");
     if (!chip) return;
-    const id = +chip.dataset.pair;
-    if (chip.classList.contains("free")) {
-      if (ev.detail === 0 || ev.pointerType === "touch" || matchMedia("(pointer: coarse)").matches) {
-        picked = picked === id ? null : id; // clavier ou doigt
-        selected = null;
-        render();
-      }
-      return;
-    }
-    const open = data.periods.find((p) => p.pair === id && !p.end);
-    if (open) { selected = open.id; picked = null; render(); }
+    // Paire libre à la souris : déjà traitée au relâchement (glisser ou clic).
+    if (chip.classList.contains("free") && ev.detail !== 0 && ev.pointerType === "mouse") return;
+    openPair(+chip.dataset.pair);
   });
 
   $("tl-season").addEventListener("click", () => send("season", { date: $("tl-season-date").value }));
