@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.costs import depreciation, due_dates, km_between
+from app.costs import depreciation, due_amount, due_dates, km_between
 from app.models import Contract, Vehicle
 from app.util import add_months, format_money, parse_money
 
@@ -43,3 +43,14 @@ def test_depreciation_is_linear_over_the_chosen_years():
     assert abs(one_year - 200_000) < 200
     assert depreciation(vehicle, date(2025, 1, 1), date(2025, 12, 31)) == 0
     assert depreciation(vehicle, date(2040, 1, 1), date(2040, 12, 31)) == 0
+
+
+def test_last_instalment_is_prorated_when_the_contract_ends_early():
+    contract = Contract(start_date=date(2025, 1, 1), amount_cents=73000, period="annuel")
+    assert due_amount(contract, date(2026, 1, 1)) == 73000
+    contract.end_date = date(2026, 12, 31)
+    assert due_amount(contract, date(2026, 1, 1)) == 73000
+    contract.end_date = date(2026, 6, 30)
+    assert due_dates(contract, date(2026, 12, 31)) == [date(2025, 1, 1), date(2026, 1, 1)]
+    assert due_amount(contract, date(2025, 1, 1)) == 73000
+    assert due_amount(contract, date(2026, 1, 1)) == 36200  # 181 jours sur 365

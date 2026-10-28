@@ -42,6 +42,17 @@ def due_dates(contract: Contract, until: date) -> list[date]:
         i += 1
 
 
+def due_amount(contract: Contract, due: date) -> int:
+    """Montant d'une échéance : au prorata des jours couverts si le contrat
+    se termine avant l'échéance suivante (date de fin incluse)."""
+    amount = contract.amount_cents or 0
+    following = add_months(due, PERIODS[contract.period])
+    if contract.end_date is None or contract.end_date >= following:
+        return amount
+    covered = (contract.end_date - due).days + 1
+    return min(amount, round(amount * covered / (following - due).days))
+
+
 def sync_contract_expenses(session: Session, contract: Contract, today: date) -> None:
     """Crée les échéances manquantes d'un contrat sous forme de dépenses."""
     existing = set(
@@ -56,10 +67,11 @@ def sync_contract_expenses(session: Session, contract: Contract, today: date) ->
             Expense(
                 vehicle_id=contract.vehicle_id,
                 date=due,
-                amount_cents=contract.amount_cents,
+                amount_cents=due_amount(contract, due),
                 category_id=contract.category_id,
                 vendor=contract.provider,
-                description=f"{contract.kind} {contract.period}",
+                description=f"{contract.kind} {contract.period}"
+                + (" (prorata)" if due_amount(contract, due) != contract.amount_cents else ""),
                 contract_id=contract.id,
                 generated=True,
             )
