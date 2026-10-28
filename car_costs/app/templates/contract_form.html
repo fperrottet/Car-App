@@ -8,7 +8,7 @@
     {{ m.field("provider", "Fournisseur / assureur", contract.provider if contract else "", required=True) }}
     {{ m.field("policy_number", "N° de police / contrat", contract.policy_number if contract else "") }}
     {{ m.field("start_date", "Début", contract.start_date|iso if contract else "", type="date", required=True) }}
-    {{ m.field("end_date", "Fin", contract.end_date|iso if contract else "", type="date", hint="Vide si à durée indéterminée") }}
+    {{ m.field("end_date", "Fin", contract.end_date|iso if contract else "", type="date", hint="Dernier jour couvert, vide si à durée indéterminée. Une fin en cours de période réduit la dernière échéance au prorata.") }}
     {{ m.field("notice_days", "Préavis de résiliation (jours)", contract.notice_days if contract else "", type="number", attrs='min="0"') }}
   </div>
   <fieldset>
