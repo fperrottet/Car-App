@@ -19,7 +19,7 @@ from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from . import charts, costs, features, sync
+from . import charts, costs, features, sync, tires
 from .db import Base, add_missing_columns, make_engine, make_sessionmaker
 from .models import (
     CATEGORY_KINDS,
@@ -78,6 +78,7 @@ def create_app(data_dir: Path | None = None, today=date.today, sync_interval: fl
         known = set(session.scalars(select(Category.name)))
         session.add_all(Category(name=n, kind=k) for n, k in ADDED_CATEGORIES if n not in known)
         session.commit()
+        tires.migrate(session)  # pneus d'avant la 0.7 : jeux -> paires
 
     background: set[asyncio.Task] = set()
 

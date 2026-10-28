@@ -7,12 +7,12 @@ import urllib.parse
 from datetime import date
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from . import charts, costs, sync
+from . import charts, costs, sync, tires
 from .models import (
     CATEGORY_KINDS,
     FUEL_CATEGORY,
@@ -25,7 +25,8 @@ from .models import (
     Inspection,
     OdometerReading,
     Reminder,
-    TireMount,
+    TirePair,
+    TirePeriod,
     TireSet,
     Vehicle,
 )
@@ -58,10 +59,6 @@ def linked_expense(session: Session, vehicle: Vehicle, expense_id: int | None, a
         setattr(expense, name, value)
     session.flush()
     return expense.id
-
-
-def positions_overlap(a: str, b: str) -> bool:
-    return a == b or "les 4" in (a, b)
 
 
 def reminder_presets(vehicle: Vehicle, today: date) -> dict[str, dict]:
@@ -106,26 +103,90 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
             vehicle = get_vehicle(session)
             if vehicle is None:
                 return redirect(request, "/vehicle")
-            points = costs.odometer_points(session, vehicle)
-            km_now = costs.current_km(session, vehicle)
-            sets = list(
-                session.scalars(
-                    select(TireSet).where(TireSet.vehicle_id == vehicle.id).order_by(TireSet.purchase_date.desc())
-                )
-            )
-            rows = [
-                {"set": s, "km": costs.tire_km(s, points, km_now), "tread": costs.last_tread(s)}
-                for s in sets
-            ]
-            return render(
-                request,
-                "tires.html",
-                mounted=[r for r in rows if r["set"].current_mount and not r["set"].retired_date],
-                stored=[r for r in rows if not r["set"].current_mount and not r["set"].retired_date],
-                retired=[r for r in rows if r["set"].retired_date],
-                today=today(),
-                km_now=km_now,
-            )
+            return render(request, "tires.html", timeline=tires.timeline(session, vehicle, today()))
+
+    async def timeline_action(request: Request, action) -> JSONResponse:
+        """Modification faite sur la frise : renvoie le nouvel état, ou l'erreur à afficher."""
+        try:
+            data = await request.json()
+        except ValueError:
+            data = {}
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return JSONResponse({"error": "Aucune voiture"}, status_code=400)
+            try:
+                message = action(session, vehicle, data)
+            except ValueError as exc:  # TimelineError, date ou nombre illisible
+                session.rollback()
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            session.commit()
+            return JSONResponse({"message": message, "timeline": tires.timeline(session, vehicle, today())})
+
+    def owned(session: Session, vehicle: Vehicle, model, item_id) -> TirePair | TirePeriod:
+        item = session.get(model, parse_int(str(item_id)) or 0) if item_id is not None else None
+        pair = item if isinstance(item, TirePair) else item.pair if item else None
+        if pair is None or pair.tire_set.vehicle_id != vehicle.id:
+            raise tires.TimelineError("Pneus introuvables, recharge la page")
+        return item
+
+    def day(data, key="date") -> date:
+        value = parse_date(str(data.get(key) or ""))
+        if value is None:
+            raise tires.TimelineError("Date manquante")
+        return value
+
+    def tread(data) -> float | None:
+        value = parse_float(str(data.get("tread_mm") or ""))
+        if value is not None and not 0 <= value <= 15:
+            raise tires.TimelineError("Sculpture en mm, entre 0 et 15")
+        return value
+
+    @app.post("/tires/timeline/mount")
+    async def timeline_mount(request: Request):
+        return await timeline_action(request, lambda session, vehicle, data: tires.mount(
+            session, vehicle, owned(session, vehicle, TirePair, data.get("pair")), str(data.get("axle")), day(data), today()))
+
+    @app.post("/tires/timeline/move")
+    async def timeline_move(request: Request):
+        return await timeline_action(request, lambda session, vehicle, data: tires.move_change(
+            session, vehicle, owned(session, vehicle, TirePeriod, data.get("period")), day(data), bool(data.get("linked")), today()))
+
+    @app.post("/tires/timeline/delete")
+    async def timeline_delete(request: Request):
+        return await timeline_action(request, lambda session, vehicle, data: tires.delete_period(
+            session, vehicle, owned(session, vehicle, TirePeriod, data.get("period"))))
+
+    @app.post("/tires/timeline/end")
+    async def timeline_end(request: Request):
+        return await timeline_action(request, lambda session, vehicle, data: tires.end_period(
+            owned(session, vehicle, TirePeriod, data.get("period")), day(data), tread(data)))
+
+    @app.post("/tires/timeline/tread")
+    async def timeline_tread(request: Request):
+        def action(session, vehicle, data):
+            period = owned(session, vehicle, TirePeriod, data.get("period"))
+            period.tread_mm = tread(data)
+            return f"Sculpture notée pour {period.pair.label}"
+        return await timeline_action(request, action)
+
+    @app.post("/tires/timeline/retire")
+    async def timeline_retire(request: Request):
+        return await timeline_action(request, lambda session, vehicle, data: tires.retire(
+            owned(session, vehicle, TirePair, data.get("pair")), day(data), tread(data)))
+
+    @app.post("/tires/timeline/unretire")
+    async def timeline_unretire(request: Request):
+        def action(session, vehicle, data):
+            pair = owned(session, vehicle, TirePair, data.get("pair"))
+            pair.retired_date = None
+            return f"{pair.label} remise au garage"
+        return await timeline_action(request, action)
+
+    @app.post("/tires/timeline/season")
+    async def timeline_season(request: Request):
+        return await timeline_action(request, lambda session, vehicle, data: tires.season_change(
+            session, vehicle, day(data), today()))
 
     def tire_form(request: Request, session: Session, item: TireSet | None, form=None, error=None):
         vehicle = get_vehicle(session)
@@ -134,14 +195,12 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
         ).first()
         points = costs.odometer_points(session, vehicle) if vehicle else []
         km_now = costs.current_km(session, vehicle) if vehicle else None
-        mounts = []
-        if item and item.id:
-            mounts = [(m, costs.mount_km(m, points, km_now)) for m in item.mounts]
+        pairs = [(p, tires.pair_km(p, points, km_now), tires.last_tread(p)) for p in item.pairs] if item and item.id else []
         return render(
             request,
             "tire_form.html",
             item=item,
-            mounts=mounts,
+            pairs=pairs,
             last=last,
             seasons=TIRE_SEASONS,
             positions=TIRE_POSITIONS,
@@ -172,6 +231,7 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
                 item.purchase_date = parse_date(form.get("purchase_date"))
                 item.notes = clean(form.get("notes"))
                 amount = parse_money(form.get("amount"))
+                tires.ensure_pairs(item)
                 session.add(item)
                 session.flush()
                 item.expense_id = linked_expense(
@@ -184,24 +244,16 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
                     vendor=clean(form.get("vendor")),
                     description=f"{item.count} pneus {item.season} {item.label}"[:200],
                 )
-                if form.get("mount_now") and not item.mounts:
-                    mount(session, vehicle, item, parse_date(form.get("mount_date")) or item.purchase_date or today(),
-                          parse_int(form.get("mount_km")))
+                if form.get("mount_now") and not item_id:
+                    when = parse_date(form.get("mount_date")) or item.purchase_date or today()
+                    axles = ["avant", "arriere"] if item.count >= 4 else ["arriere" if item.position == "arrière" else "avant"]
+                    for pair, axle in zip(item.pairs, axles):
+                        tires.mount(session, vehicle, pair, axle, min(when, today()), today())
             except ValueError as exc:
                 session.rollback()
                 return tire_form(request, session, item if item.id else None, dict(form), str(exc))
             session.commit()
         return redirect(request, "/tires")
-
-    def mount(session: Session, vehicle: Vehicle, item: TireSet, when: date, km: int | None) -> None:
-        """Monte un jeu ; ceux qui occupaient la même place sont démontés."""
-        km = km if km is not None else costs.km_at(costs.odometer_points(session, vehicle), when)
-        others = session.scalars(select(TireSet).where(TireSet.vehicle_id == vehicle.id, TireSet.id != item.id))
-        for other in others:
-            current = other.current_mount
-            if current and positions_overlap(other.position, item.position):
-                current.removed_date, current.removed_km = when, km
-        item.mounts.append(TireMount(mounted_date=when, mounted_km=km))
 
     @app.get("/tires/new", response_class=HTMLResponse)
     def tire_new(request: Request):
@@ -221,74 +273,13 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
     async def tire_update(request: Request, item_id: int):
         return await tire_save(request, item_id)
 
-    @app.post("/tires/{item_id}/mount")
-    async def tire_mount(request: Request, item_id: int):
-        form = await request.form()
+    @app.post("/tires/pairs/{pair_id}/unretire")
+    def tire_pair_unretire(request: Request, pair_id: int):
         with Sessions() as session:
-            item = get_or_404(session, TireSet, item_id)
-            try:
-                when = parse_date(form.get("date")) or today()
-                km = parse_int(form.get("km"))
-            except ValueError as exc:
-                return tire_form(request, session, item, dict(form), str(exc))
-            if item.current_mount is None:
-                mount(session, get_vehicle(session), item, when, km)
-                item.retired_date = None
-                session.commit()
-        return redirect(request, f"/tires/{item_id}")
-
-    @app.post("/tires/{item_id}/unmount")
-    async def tire_unmount(request: Request, item_id: int):
-        form = await request.form()
-        with Sessions() as session:
-            item = get_or_404(session, TireSet, item_id)
-            current = item.current_mount
-            if current is not None:
-                try:
-                    current.removed_date = parse_date(form.get("date")) or today()
-                    current.removed_km = parse_int(form.get("km"))
-                    current.tread_mm = parse_float(form.get("tread_mm"))
-                except ValueError as exc:
-                    session.rollback()
-                    return tire_form(request, session, item, dict(form), str(exc))
-                if current.removed_km is None:
-                    vehicle = get_vehicle(session)
-                    current.removed_km = costs.km_at(costs.odometer_points(session, vehicle), current.removed_date)
-                if form.get("retire"):
-                    item.retired_date = current.removed_date
-                session.commit()
-        return redirect(request, f"/tires/{item_id}")
-
-    @app.post("/tires/{item_id}/tread")
-    async def tire_tread(request: Request, item_id: int):
-        """Sculpture mesurée après coup (jeu démonté automatiquement, contrôle au garage)."""
-        form = await request.form()
-        with Sessions() as session:
-            item = get_or_404(session, TireSet, item_id)
-            try:
-                tread = parse_float(form.get("tread_mm"))
-            except ValueError as exc:
-                return tire_form(request, session, item, dict(form), str(exc))
-            if item.mounts and tread is not None:
-                item.mounts[-1].tread_mm = tread
-                session.commit()
-        return redirect(request, f"/tires/{item_id}")
-
-    @app.post("/tires/{item_id}/retire")
-    def tire_retire(request: Request, item_id: int):
-        with Sessions() as session:
-            item = get_or_404(session, TireSet, item_id)
-            item.retired_date = None if item.retired_date else today()
+            pair = get_or_404(session, TirePair, pair_id)
+            pair.retired_date = None
             session.commit()
-        return redirect(request, "/tires")
-
-    @app.post("/tires/mounts/{mount_id}/delete")
-    def tire_mount_delete(request: Request, mount_id: int):
-        with Sessions() as session:
-            item = get_or_404(session, TireMount, mount_id)
-            set_id = item.tire_set_id
-            session.delete(item)
-            session.commit()
+            set_id = pair.tire_set_id
         return redirect(request, f"/tires/{set_id}")
 
     @app.post("/tires/{item_id}/delete")
