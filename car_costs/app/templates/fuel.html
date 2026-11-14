@@ -5,7 +5,7 @@
   <div class="tile">
     <span>Consommation moyenne</span>
     <strong>{% if average %}{{ "%.2f"|format(average) }} l/100 km{% else %}–{% endif %}</strong>
-    <small>{% if average %}sur les pleins dont le compteur est connu{% else %}note les km au compteur à chaque plein{% endif %}</small>
+    <small>{% if average %}sur les vrais pleins dont le compteur est connu{% else %}note les km au compteur à chaque plein{% endif %}</small>
   </div>
   <div class="tile">
     <span>Cette année</span>
@@ -32,13 +32,38 @@
   <p class="muted">Chaque plein est compté comme une dépense « Carburant ». Fais le plein complet à chaque fois : les litres d'un plein couvrent les km roulés depuis le précédent.</p>
 </section>
 
+<section>
+  <h2>Reconstituer des pleins passés</h2>
+  <details{% if not fills %} open{% endif %}>
+    <summary>Estimer les pleins d'une période d'après une consommation moyenne</summary>
+    <form method="post" action="{{ base }}/fuel/estimate" class="card">
+      <div class="grid">
+        <label>Du <input type="date" name="start" value="{{ guess.start|iso }}" required></label>
+        <label>Au <input type="date" name="end" value="{{ guess.end|iso }}" max="{{ today|iso }}" required></label>
+        <label>Km au début <input name="km_start" inputmode="numeric" value="{{ guess.km_start or '' }}" required></label>
+        <label>Km à la fin <input name="km_end" inputmode="numeric" value="{{ guess.km_end or '' }}" required></label>
+        <label>Consommation (l/100 km) <input name="l100" inputmode="decimal" value="{{ guess.l100 or '' }}" placeholder="6.0" required></label>
+        <label>Prix à la fin de la période (CHF/l) <input name="price" inputmode="decimal" value="{{ guess.price or '' }}" placeholder="1.80" required></label>
+      </div>
+      <p class="muted">Un plein estimé est créé à la fin de chaque mois, pour les km roulés ce mois-là (d'après tes relevés du compteur, sinon répartis régulièrement). Le prix des mois précédents suit l'indice suisse de l'essence. La période ne doit contenir aucun plein déjà noté : arrête-la la veille de ton premier vrai plein.</p>
+      <button>Créer les pleins estimés</button>
+    </form>
+  </details>
+  {% if estimated %}
+  <form method="post" action="{{ base }}/fuel/estimate/delete" class="inline" onsubmit="return confirm('Supprimer les {{ estimated }} pleins estimés ?')">
+    <span class="muted">{{ estimated }} plein{{ "s" if estimated > 1 }} estimé{{ "s" if estimated > 1 }}.</span>
+    <button class="link danger">Supprimer tous les pleins estimés</button>
+  </form>
+  {% endif %}
+</section>
+
 {% if fills %}
 <table>
   <thead><tr><th>Date</th><th>Station</th><th class="num">Km</th><th class="num">Litres</th><th class="num">CHF</th><th class="num">CHF/l</th><th class="num">Distance</th><th class="num">l/100 km</th></tr></thead>
   <tbody>
     {% for f in fills %}
     <tr>
-      <td><a href="{{ base }}/expenses/{{ f.expense.id }}">{{ f.expense.date|fdate }}</a></td>
+      <td><a href="{{ base }}/expenses/{{ f.expense.id }}">{{ f.expense.date|fdate }}</a>{% if f.expense.estimated %} <span class="tag">estimé</span>{% endif %}</td>
       <td>{{ f.expense.vendor or "" }}</td>
       <td class="num">{{ f.km|km if f.km else "" }}</td>
       <td class="num">{{ "%.2f"|format(f.expense.fuel_liters) }}</td>

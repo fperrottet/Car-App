@@ -30,7 +30,7 @@
   const x = (t) => (t - START) / DAY * PX;
   const timeAt = (px) => START + Math.round(px / PX) * DAY;
 
-  const pairs = () => data.sets.flatMap((s, i) => s.pairs.map((p) => ({ ...p, set: s, color: COLORS[i % COLORS.length] })));
+  const pairs = () => data.sets.flatMap((s, i) => s.pairs.map((p) => ({ ...p, set: s, color: COLORS[s.color % COLORS.length] })));
   const pair = (id) => pairs().find((p) => p.id === id);
   const periods = (axle) => data.periods.filter((p) => p.axle === axle);
   const until = (p) => (p.end ? parse(p.end) : TODAY);
@@ -106,8 +106,8 @@
       return;
     }
     $("tl-sets").innerHTML = data.sets.map((s, i) => `
-      <div class="tl-set">
-        <div class="tl-set-name"><span class="tl-swatch" style="background:${COLORS[i % COLORS.length]}"></span>
+      <div class="tl-set ${s.pairs.every((p) => p.retired) ? "worn" : ""}">
+        <div class="tl-set-name"><span class="tl-swatch" style="background:${COLORS[s.color % COLORS.length]}"></span>
           <a href="${BASE}/tires/${s.id}">${esc(s.label)}</a></div>
         <div class="muted">${esc(s.season)}${s.size ? ` · ${esc(s.size)}` : ""} · ${s.count} pneus${s.purchase_date ? ` · achat ${fdate(s.purchase_date)}` : ""}</div>
         <div class="tl-chips">${s.pairs.map((p) => {

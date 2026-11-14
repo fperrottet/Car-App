@@ -198,6 +198,8 @@ class Expense(Base):
     generated: Mapped[bool] = mapped_column(default=False)
     # Plein de carburant : litres achetés (le plein est supposé complet).
     fuel_liters: Mapped[float | None]
+    # Plein reconstitué après coup d'après une consommation moyenne.
+    estimated: Mapped[bool | None]
 
     category: Mapped[Category | None] = relationship()
     contract: Mapped[Contract | None] = relationship()

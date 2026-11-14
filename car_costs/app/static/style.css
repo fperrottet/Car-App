@@ -146,6 +146,7 @@ nav .switcher select { font-weight: 600; padding: 4px 8px; }
 .tl-row input { width: auto; }
 .tl-sets { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
 .tl-set { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; align-content: start; background: var(--surface); }
+.tl-set.worn { opacity: .65; }
 .tl-set-name { display: flex; gap: 8px; align-items: center; font-weight: 600; }
 .tl-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 .tl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
