@@ -634,17 +634,77 @@ def fuel_log(session: Session, vehicle: Vehicle) -> list[FuelFill]:
         )
     )
     fills: list[FuelFill] = []
-    previous_km: int | None = None
+    previous_km: int | None = None  # dernier plein, estimé ou non
+    previous_real_km: int | None = None  # dernier vrai plein
     for e in expenses:
-        distance = e.odometer_km - previous_km if e.odometer_km and previous_km and e.odometer_km > previous_km else None
+        # Un vrai plein ne se mesure que depuis le vrai plein précédent : ses litres
+        # ne correspondent pas aux km d'une estimation qui le précède.
+        before = previous_km if e.estimated else previous_real_km
+        distance = e.odometer_km - before if e.odometer_km and before and e.odometer_km > before else None
         fills.append(FuelFill(e, e.odometer_km, distance, 100 * e.fuel_liters / distance if distance else None))
         if e.odometer_km:
             previous_km = e.odometer_km
+            if not e.estimated:
+                previous_real_km = e.odometer_km
     return fills[::-1]
 
 
 def fuel_average(fills: list[FuelFill]) -> float | None:
-    """Consommation moyenne sur les pleins dont la distance est connue."""
-    measured = [f for f in fills if f.distance]
+    """Consommation moyenne sur les vrais pleins dont la distance est connue."""
+    measured = [f for f in fills if f.distance and not f.expense.estimated]
     distance = sum(f.distance for f in measured)
     return 100 * sum(f.expense.fuel_liters for f in measured) / distance if distance else None
+
+
+@dataclass
+class EstimatedFill:
+    date: date
+    km: int  # compteur à la fin du mois
+    distance: int
+    liters: float
+    price: float  # CHF/l
+
+    @property
+    def amount_cents(self) -> int:
+        return round(self.liters * self.price * 100)
+
+
+def estimate_fills(start: date, end: date, km_start: int, km_end: int, l100: float, price: float,
+                   index: dict[str, float], points: list[tuple[date, int]] | None = None) -> list[EstimatedFill]:
+    """Un plein estimé par mois entre deux dates : km du mois × consommation.
+    Les km suivent les relevés du compteur s'il y en a assez, sinon ils sont
+    répartis au prorata des jours. Le prix saisi vaut pour le dernier mois ;
+    les autres suivent l'indice suisse de l'essence (OFEN) quand il est connu."""
+    if end <= start:
+        raise ValueError("La date de fin doit suivre la date de début")
+    if km_end <= km_start:
+        raise ValueError("Le compteur de fin doit dépasser celui du début")
+    if l100 <= 0 or price <= 0:
+        raise ValueError("Indique une consommation et un prix positifs")
+
+    def km(day: date) -> int:
+        measured = km_at(points or [], day) if points else None
+        if measured is not None and km_start <= measured <= km_end:
+            return measured
+        return round(km_start + (km_end - km_start) * (day - start).days / (end - start).days)
+
+    keys = sorted(index)
+
+    def level(day: date) -> float | None:
+        earlier = [k for k in keys if k <= month_key(day)]
+        return index[earlier[-1] if earlier else keys[0]] if keys else None
+
+    fills = []
+    previous_day, previous_km = start, km_start
+    while previous_day <= end:
+        following = add_months(date(previous_day.year, previous_day.month, 1), 1)
+        day = min(end, following - timedelta(days=1))
+        km_day = km_end if day == end else max(previous_km, km(day))
+        distance = km_day - previous_km
+        if distance > 0:
+            month_price = price * level(day) / level(end) if keys else price
+            fills.append(EstimatedFill(day, km_day, distance, round(distance * l100 / 100, 2), round(month_price, 3)))
+        previous_day, previous_km = day + timedelta(days=1), km_day
+        if day == end:
+            break
+    return fills

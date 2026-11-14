@@ -4,7 +4,7 @@ et tarifs d'électricité d'avant EVCC ; en 0.6, les pleins de carburant."""
 
 import json
 import urllib.parse
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -631,12 +631,28 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
             fills = costs.fuel_log(session, vehicle)
             year = date(today().year, 1, 1)
             this_year = [f for f in fills if f.expense.date >= year]
+            average = costs.fuel_average(fills)
+            real = [f for f in fills if not f.expense.estimated]
+            points = costs.odometer_points(session, vehicle)
+            first_real = real[-1].expense.date if real else None
+            start = vehicle.purchase_date or (first_real or today()).replace(month=1, day=1)
+            end = first_real - timedelta(days=1) if first_real and first_real > start else today()
+            priced = [f for f in real if f.price_per_liter]
             return render(
                 request,
                 "fuel.html",
                 vehicle=vehicle,
                 fills=fills,
-                average=costs.fuel_average(fills),
+                average=average,
+                estimated=sum(1 for f in fills if f.expense.estimated),
+                guess={
+                    "start": start,
+                    "end": end,
+                    "km_start": costs.km_at(points, start) or vehicle.purchase_odometer_km,
+                    "km_end": costs.km_at(points, end),
+                    "l100": round(average or vehicle.fuel_consumption_l100 or 0, 2) or None,
+                    "price": round(priced[0].price_per_liter, 3) if priced else vehicle.fuel_price_ref,
+                },
                 year_liters=sum(f.expense.fuel_liters for f in this_year),
                 year_cents=sum(f.expense.amount_cents for f in this_year),
                 km_now=costs.current_km(session, vehicle),
@@ -671,6 +687,66 @@ def register(app: FastAPI, *, Sessions, render, redirect, get_vehicle, get_or_40
             except ValueError as exc:
                 return back_with(request, "/fuel", str(exc))
             session.commit()
+        return redirect(request, "/fuel")
+
+    @app.post("/fuel/estimate")
+    async def fuel_estimate(request: Request):
+        """Reconstitue les pleins d'une période passée d'après une consommation moyenne."""
+        form = await request.form()
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is None:
+                return redirect(request, "/vehicle")
+            try:
+                start, end = parse_date(form.get("start")), parse_date(form.get("end"))
+                km_start, km_end = parse_int(form.get("km_start")), parse_int(form.get("km_end"))
+                l100, price = parse_float(form.get("l100")), parse_float(form.get("price"))
+                if None in (start, end, km_start, km_end, l100, price):
+                    raise ValueError("Remplis les dates, les km au compteur, la consommation et le prix")
+                if end > today():
+                    raise ValueError("La période doit être passée")
+                clash = session.scalars(
+                    select(Expense).where(
+                        Expense.vehicle_id == vehicle.id,
+                        Expense.fuel_liters.is_not(None),
+                        Expense.date >= start,
+                        Expense.date <= end,
+                    )
+                ).first()
+                if clash:
+                    kind = "un plein estimé" if clash.estimated else "un vrai plein"
+                    raise ValueError(f"Il y a déjà {kind} le {clash.date.strftime('%d.%m.%Y')} dans cette période")
+                fills = costs.estimate_fills(start, end, km_start, km_end, l100, price,
+                                             sync.load_fuel_index(session), costs.odometer_points(session, vehicle))
+                category = session.scalars(select(Category).where(Category.name == FUEL_CATEGORY)).first()
+                for f in fills:
+                    session.add(
+                        Expense(
+                            vehicle_id=vehicle.id,
+                            date=f.date,
+                            amount_cents=f.amount_cents,
+                            fuel_liters=f.liters,
+                            odometer_km=f.km,
+                            category_id=category.id if category else None,
+                            description=f"Plein estimé ({l100:g} l/100 km)",
+                            estimated=True,
+                        )
+                    )
+            except ValueError as exc:
+                return back_with(request, "/fuel", str(exc))
+            session.commit()
+        return redirect(request, "/fuel")
+
+    @app.post("/fuel/estimate/delete")
+    def fuel_estimate_delete(request: Request):
+        with Sessions() as session:
+            vehicle = get_vehicle(session)
+            if vehicle is not None:
+                for e in session.scalars(
+                    select(Expense).where(Expense.vehicle_id == vehicle.id, Expense.estimated.is_(True))
+                ):
+                    session.delete(e)
+                session.commit()
         return redirect(request, "/fuel")
 
     @app.post("/tariffs/{item_id}/delete")

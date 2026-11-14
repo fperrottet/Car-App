@@ -306,10 +306,15 @@ def timeline(session: Session, vehicle: Vehicle, today: date) -> dict:
     km_now = costs.current_km(session, vehicle)
     pairs = vehicle_pairs(session, vehicle)
     sets = []
-    for tire_set in sorted({p.tire_set for p in pairs}, key=lambda s: (s.purchase_date or date.min, s.id)):
+    # Les achats dont toutes les paires sont éliminées passent en dernier.
+    worn_out = lambda s: all(p.retired_date for p in s.pairs)  # noqa: E731
+    # La couleur d'un achat suit l'ordre chronologique, pour ne pas changer quand il passe en bas.
+    chrono = sorted({p.tire_set for p in pairs}, key=lambda s: (s.purchase_date or date.min, s.id))
+    for tire_set in sorted({p.tire_set for p in pairs}, key=lambda s: (worn_out(s), s.purchase_date or date.min, s.id)):
         sets.append({
             "id": tire_set.id,
             "label": tire_set.label,
+            "color": chrono.index(tire_set),
             "season": tire_set.season,
             "size": tire_set.size,
             "count": tire_set.count,
@@ -324,7 +329,7 @@ def timeline(session: Session, vehicle: Vehicle, today: date) -> dict:
                     "tread": last_tread(p),
                     "axle": next((q.axle for q in p.periods if q.end_date is None), None),
                 }
-                for p in tire_set.pairs
+                for p in sorted(tire_set.pairs, key=lambda p: (p.retired_date is not None, p.name))
             ],
         })
     periods = [
